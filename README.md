@@ -31,6 +31,7 @@ Data lives in D1: `users`, `allowlist`, `checks` (one row per user/day/slot), `m
 | `/undo` | everyone | Remove your last moment |
 | `/stats` | everyone | Streak and counts as text |
 | `/timezone Area/City` | everyone | Show or change your timezone (default `Europe/Paris`) |
+| `/widget` | everyone | Get an iPhone home screen widget script for [Scriptable](https://scriptable.app) |
 | `/allow <id>` | owner | Give someone access |
 | `/remove <id>` | owner | Remove access, stop reminders. Their data is kept |
 | `/users` | owner | List allowed users |

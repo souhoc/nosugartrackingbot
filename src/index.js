@@ -21,6 +21,9 @@ export default {
     if (url.pathname === "/api/stats") {
       return handleStats(request, env);
     }
+    if (url.pathname === "/api/widget") {
+      return handleWidget(request, env);
+    }
     return new Response("Not found", { status: 404 });
   },
 
@@ -230,6 +233,10 @@ async function handleMessage(message, env, url) {
     await undoMoment(env, from.id);
     return;
   }
+  if (text.startsWith("/widget")) {
+    await sendWidgetScript(env, from.id, url.origin);
+    return;
+  }
   if (text.startsWith("/timezone")) {
     await setTimezone(env, from.id, text.split(/\s+/)[1]);
     return;
@@ -258,7 +265,7 @@ async function handleMessage(message, env, url) {
       `${BTN_REFUSED}: you said no to sugar\n` +
       `${BTN_SUGAR}: you had some\n\n` +
       "/undo removes the last moment, /stats gives a summary, " +
-      "/timezone Area/City changes your timezone.",
+      "/timezone Area/City changes your timezone, /widget gives an iPhone widget (Scriptable).",
     reply_markup: {
       keyboard: [[{ text: BTN_REFUSED }, { text: BTN_SUGAR }]],
       resize_keyboard: true,
@@ -427,6 +434,164 @@ async function hmacSha256(keyBytes, message) {
 function toHex(bytes) {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+// ---------- iOS widget (Scriptable) ----------
+// The widget can't use Mini App initData (expires after 24h), so it uses a long-lived token:
+// "<userId>.<hmac(BOT_TOKEN, 'widget:<userId>')>". No table needed.
+// Revoke one user: /remove. Revoke all tokens: change BOT_TOKEN.
+
+async function widgetToken(env, userId) {
+  const sig = await hmacSha256(new TextEncoder().encode(env.BOT_TOKEN), `widget:${userId}`);
+  return `${userId}.${toHex(sig).slice(0, 32)}`;
+}
+
+async function checkWidgetToken(env, token) {
+  const userId = Number(token.split(".")[0]);
+  if (!Number.isInteger(userId) || userId <= 0) return null;
+  const expected = new TextEncoder().encode(await widgetToken(env, userId));
+  const given = new TextEncoder().encode(token);
+  if (expected.length !== given.length) return null;
+  if (!crypto.subtle.timingSafeEqual(expected, given)) return null;
+  return userId;
+}
+
+async function handleWidget(request, env) {
+  const auth = request.headers.get("Authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const userId = await checkWidgetToken(env, token);
+
+  if (!userId || !(await isAllowed(env, userId))) {
+    console.warn("widget: unauthorized", userId);
+    return Response.json({ error: "unauthorized" }, { status: 403 });
+  }
+
+  const days = await loadDays(env, userId);
+  const today = localNow(Date.now(), await userTimezone(env, userId)).date;
+  const stats = computeStats(days, today);
+
+  // Last 7 days, oldest first, today last.
+  const week = [];
+  for (let i = 6; i >= 0; i--) {
+    const date = shiftDay(today, -i);
+    week.push({ date, status: dayStatus(days[date]) });
+  }
+  const refusedToday = (days[today]?.moments || []).filter((m) => m.kind === "refused").length;
+
+  return Response.json({ today, todayStatus: dayStatus(days[today]), refusedToday, week, ...stats });
+}
+
+async function sendWidgetScript(env, userId, origin) {
+  const token = await widgetToken(env, userId);
+  const me = await tg(env, "getMe", {});
+  const botUrl = `https://t.me/${me.result?.username || ""}`;
+  const script = WIDGET_SCRIPT.replace("__API__", `${origin}/api/widget`)
+    .replace("__TOKEN__", token)
+    .replace("__BOT__", botUrl);
+  console.log("sent widget script", userId);
+
+  await tg(env, "sendMessage", {
+    chat_id: userId,
+    text:
+      "📱 iPhone widget with Scriptable:\n" +
+      "1. Copy the script in the next message (tap it).\n" +
+      "2. In Scriptable, tap +, paste, name it \"No Sugar\".\n" +
+      "3. On the home screen, add a small Scriptable widget.\n" +
+      "4. Long-press it → Edit Widget → Script: No Sugar.\n\n" +
+      "🔒 The script holds your personal token. Anyone with it can see your stats, so don't share it.",
+  });
+  await tg(env, "sendMessage", {
+    chat_id: userId,
+    text: `<pre><code class="language-javascript">${escapeHtml(script)}</code></pre>`,
+    parse_mode: "HTML",
+  });
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Scriptable script. Plain string, no template literals inside.
+const WIDGET_SCRIPT = `// No Sugar widget. Get a fresh copy with /widget in the bot.
+const API = "__API__";
+const TOKEN = "__TOKEN__";
+const BOT = "__BOT__";
+
+const C = {
+  bg: Color.dynamic(new Color("#ffffff"), new Color("#1c1c1e")),
+  text: Color.dynamic(new Color("#000000"), new Color("#ffffff")),
+  dim: new Color("#8e8e93"),
+  clean: new Color("#1a7f52"),
+  sugar: new Color("#f6c7b8"),
+  none: Color.dynamic(new Color("#e5e5ea"), new Color("#3a3a3c")),
+};
+
+const widget = new ListWidget();
+widget.backgroundColor = C.bg;
+widget.url = BOT;
+widget.refreshAfterDate = new Date(Date.now() + 30 * 60 * 1000);
+
+try {
+  const req = new Request(API);
+  req.headers = { Authorization: "Bearer " + TOKEN };
+  const data = await req.loadJSON();
+  if (data.error) throw new Error(data.error);
+  draw(data);
+} catch (e) {
+  const t = widget.addText("No Sugar\\n" + e.message);
+  t.font = Font.systemFont(12);
+  t.textColor = C.dim;
+}
+
+if (config.runsInWidget) Script.setWidget(widget);
+else await widget.presentSmall();
+Script.complete();
+
+function draw(d) {
+  const top = widget.addStack();
+  top.centerAlignContent();
+  const flame = top.addText("🔥");
+  flame.font = Font.systemFont(22);
+  top.addSpacer(4);
+  const num = top.addText(String(d.streak));
+  num.font = Font.boldRoundedSystemFont(36);
+  num.textColor = C.text;
+
+  const label = widget.addText(d.streak === 1 ? "day without sugar" : "days without sugar");
+  label.font = Font.mediumSystemFont(12);
+  label.textColor = C.dim;
+
+  widget.addSpacer();
+
+  const row = widget.addStack();
+  for (let i = 0; i < d.week.length; i++) {
+    const day = d.week[i];
+    const dot = row.addStack();
+    dot.size = new Size(14, 14);
+    dot.cornerRadius = 7;
+    dot.backgroundColor = C[day.status] || C.none;
+    if (day.date === d.today) {
+      dot.borderWidth = 2;
+      dot.borderColor = C.text;
+    }
+    if (i < d.week.length - 1) row.addSpacer(5);
+  }
+
+  widget.addSpacer(8);
+
+  const status = {
+    clean: "✅ Clean today",
+    sugar: "🍬 Sugar today",
+    none: "Nothing logged today",
+  }[d.todayStatus];
+  const line = widget.addText(status + (d.refusedToday ? "  💪" + d.refusedToday : ""));
+  line.font = Font.mediumSystemFont(11);
+  line.textColor = C.text;
+
+  const best = widget.addText("🏆 Best " + d.best);
+  best.font = Font.systemFont(11);
+  best.textColor = C.dim;
+}
+`;
 
 // ---------- Stats ----------
 
