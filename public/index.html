@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>No Sugar</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* Design A: "Telegram native". Telegram injects --tg-theme-* vars; fallbacks are for a plain browser. */
+    :root {
+      --bg: var(--tg-theme-bg-color, #ffffff);
+      --text: var(--tg-theme-text-color, #1a1a1a);
+      --hint: var(--tg-theme-hint-color, #636363);
+      --card: var(--tg-theme-secondary-bg-color, #f2f2f5);
+      --ring: var(--tg-theme-button-color, #2f80ed);
+      --flame: #e8590c;
+      --clean: #1a7f52;
+      --clean-text: #ffffff;
+      --sugar: #f6c7b8;
+      --sugar-text: #7a2a16;
+      --empty: color-mix(in srgb, var(--hint) 14%, transparent);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.4 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #app { max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+    .muted { color: var(--hint); }
+
+    .streak { display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 16px; }
+    .streak .row { display: flex; align-items: center; gap: 8px; }
+    .streak .num { font-size: 64px; font-weight: 700; line-height: 1; letter-spacing: -2px; }
+
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .stat {
+      background: var(--card); border-radius: 12px; padding: 12px 4px;
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
+    }
+    .stat b { font-size: 22px; font-weight: 700; }
+    .stat span { font-size: 12px; color: var(--hint); text-align: center; }
+
+    .cal-head { display: flex; align-items: center; justify-content: space-between; }
+    .cal-head h2 { margin: 0; font-size: 17px; font-weight: 600; }
+    .cal-head button {
+      width: 44px; height: 44px; border: 0; border-radius: 12px;
+      background: var(--card); color: var(--text); font-size: 20px; cursor: pointer;
+    }
+
+    .grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+    .dow { text-align: center; font-size: 12px; color: var(--hint); }
+    .day {
+      position: relative; aspect-ratio: 1; border-radius: 10px; border: 0;
+      display: flex; align-items: center; justify-content: center;
+      font: inherit; font-size: 14px; cursor: pointer;
+      background: var(--empty); color: var(--hint);
+    }
+    .day.clean { background: var(--clean); color: var(--clean-text); font-weight: 500; }
+    .day.sugar { background: var(--sugar); color: var(--sugar-text); font-weight: 600; }
+    .day.today { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring); font-weight: 700; }
+    .day.selected { outline: 2px solid var(--text); outline-offset: 2px; }
+    .day.blank { background: none; cursor: default; }
+    /* Small mark for days with at least one refusal. */
+    .day.refused::after {
+      content: ""; position: absolute; bottom: 5px; width: 5px; height: 5px;
+      border-radius: 50%; background: currentColor;
+    }
+
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; font-size: 12px; color: var(--hint); }
+    .legend span { display: flex; align-items: center; gap: 6px; }
+    .sw { width: 10px; height: 10px; border-radius: 3px; }
+    .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--hint); }
+
+    .detail { background: var(--card); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+    .detail .row { display: flex; justify-content: space-between; gap: 12px; }
+    .detail .ok { color: var(--clean); font-weight: 600; }
+    .detail .bad { color: #b4401f; font-weight: 600; }
+    .detail hr { border: 0; border-top: 1px solid color-mix(in srgb, var(--hint) 25%, transparent); margin: 4px 0; width: 100%; }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --clean: #2fa36b; }
+      :root:not([data-theme="light"]) .detail .bad { color: #f6a58c; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"><p class="muted">Loading…</p></div>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    tg?.ready();
+    tg?.expand();
+
+    const app = document.getElementById("app");
+    let data = null;
+    let viewYear, viewMonth; // month shown (0-based month)
+    let selected = null;
+
+    const FLAME =
+      '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.2 1-3.6 2-4.5.3 1.7 1.2 2.5 2 2.5-.5-3 0-5.5 1-8z"></path></svg>';
+
+    async function load() {
+      if (!tg?.initData) {
+        app.innerHTML = '<p class="muted">Open this page from the Telegram bot.</p>';
+        return;
+      }
+      const res = await fetch("/api/stats", { headers: { Authorization: "tma " + tg.initData } });
+      if (!res.ok) {
+        app.innerHTML = '<p class="muted">Not authorized (' + res.status + ").</p>";
+        return;
+      }
+      data = await res.json();
+      const [y, m] = data.today.split("-").map(Number);
+      viewYear = y;
+      viewMonth = m - 1;
+      selected = data.today;
+      render();
+    }
+
+    function pad(n) { return String(n).padStart(2, "0"); }
+
+    function refusedCount(date) {
+      const moments = data.calendar[date]?.moments || [];
+      return moments.filter((m) => m.kind === "refused").length;
+    }
+
+    function render() {
+      const first = new Date(Date.UTC(viewYear, viewMonth, 1));
+      const daysInMonth = new Date(Date.UTC(viewYear, viewMonth + 1, 0)).getUTCDate();
+      const offset = (first.getUTCDay() + 6) % 7; // Monday first
+      const title = first.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+
+      let cells = ["M", "T", "W", "T", "F", "S", "S"].map((d) => `<div class="dow">${d}</div>`).join("");
+      for (let i = 0; i < offset; i++) cells += '<div class="day blank"></div>';
+      for (let d = 1; d <= daysInMonth; d++) {
+        const date = `${viewYear}-${pad(viewMonth + 1)}-${pad(d)}`;
+        const status = data.calendar[date]?.status || "none";
+        const classes = ["day", status];
+        if (date === data.today) classes.push("today");
+        if (date === selected) classes.push("selected");
+        if (refusedCount(date) > 0) classes.push("refused");
+        cells += `<button class="${classes.join(" ")}" data-date="${date}" aria-label="${date}, ${status}">${d}</button>`;
+      }
+
+      app.innerHTML = `
+        <div class="streak">
+          <div class="row">${FLAME}<span class="num">${data.streak}</span></div>
+          <span class="muted">day streak</span>
+        </div>
+        <div class="stats">
+          <div class="stat"><b>${data.best}</b><span>best streak</span></div>
+          <div class="stat"><b>${data.clean}</b><span>clean days</span></div>
+          <div class="stat"><b>${data.sugar}</b><span>sugar days</span></div>
+          <div class="stat"><b>${data.refused}</b><span>refused</span></div>
+        </div>
+        <div class="cal-head">
+          <button id="prev" aria-label="Previous month">‹</button>
+          <h2>${title}</h2>
+          <button id="next" aria-label="Next month">›</button>
+        </div>
+        <div class="grid">${cells}</div>
+        <div class="legend">
+          <span><span class="sw" style="background: var(--clean)"></span>Clean</span>
+          <span><span class="sw" style="background: var(--sugar)"></span>Sugar</span>
+          <span><span class="sw" style="background: var(--empty)"></span>No answer</span>
+          <span><span class="dot"></span>Refused sugar</span>
+        </div>
+        <div class="detail">${detailHtml(selected)}</div>
+      `;
+
+      document.getElementById("prev").onclick = () => moveMonth(-1);
+      document.getElementById("next").onclick = () => moveMonth(1);
+      app.querySelectorAll(".day[data-date]").forEach((el) => {
+        el.onclick = () => { selected = el.dataset.date; render(); };
+      });
+    }
+
+    function detailHtml(date) {
+      const day = data.calendar[date] || { slots: {}, moments: [] };
+      const label = new Date(date + "T00:00:00Z").toLocaleDateString("en-US", {
+        weekday: "long", month: "short", day: "numeric", timeZone: "UTC",
+      });
+      const isPast = date < data.today;
+
+      const slotRows = data.slots.map((s) => {
+        const v = day.slots[s.id];
+        let answer;
+        if (v === 0) answer = '<span class="ok">Clean</span>';
+        else if (v === 1) answer = '<span class="bad">Sugar</span>';
+        else answer = `<span class="muted">${isPast ? "No answer" : "Not yet"}</span>`;
+        return `<div class="row"><span>${s.label} <span class="muted">${s.time}</span></span>${answer}</div>`;
+      });
+
+      let momentRows = "";
+      if (day.moments.length > 0) {
+        momentRows = "<hr>" + day.moments.map((m) => {
+          const what = m.kind === "refused"
+            ? '<span class="ok">Refused sugar</span>'
+            : '<span class="bad">Had sugar</span>';
+          return `<div class="row"><span>Moment <span class="muted">${m.time}</span></span>${what}</div>`;
+        }).join("");
+      }
+
+      return `<span class="muted" style="font-size: 13px">${label}</span>${slotRows.join("")}${momentRows}`;
+    }
+
+    function moveMonth(delta) {
+      viewMonth += delta;
+      if (viewMonth < 0) { viewMonth = 11; viewYear--; }
+      if (viewMonth > 11) { viewMonth = 0; viewYear++; }
+      render();
+    }
+
+    load().catch((err) => {
+      console.error(err);
+      app.innerHTML = '<p class="muted">Error loading data.</p>';
+    });
+  </script>
+</body>
+</html>

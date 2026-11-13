@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Cloudflare build output and local state
+.cloudflare/
+.wrangler/
+
+# Secrets: never commit
+.secrets.env
+.dev.vars
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+*.log
