@@ -104,7 +104,7 @@
     }
     .rem .emoji { text-align: center; font-size: 22px; padding: 4px; }
     .rem .time { display: flex; align-items: center; gap: 4px; min-width: 0; }
-    .rem .time select { flex: 1; min-width: 0; }
+    .rem .time select { flex: 1; min-width: 0; padding: 8px 4px; text-align: center; }
     .rem textarea { grid-column: 1 / -1; resize: vertical; }
     .rem .del { background: none; color: var(--hint); font-size: 18px; padding: 0; }
     .note { font-size: 13px; color: var(--hint); margin: 0; }
@@ -266,7 +266,7 @@
     // ---------- Reminders editor ----------
 
     function openReminders() {
-      draft = data.reminders.map((r) => ({ ...r }));
+      draft = data.reminders.map((r) => ({ ...r, time: toFiveMinutes(r.time) }));
       saveMsg = "";
       view = "reminders";
       render();
@@ -300,10 +300,8 @@
       });
       app.querySelectorAll("[data-time]").forEach((el) => {
         el.onchange = () => {
-          const i = el.dataset.time;
-          const h = app.querySelector(`[data-time="${i}"][data-part="h"]`).value;
-          const m = app.querySelector(`[data-time="${i}"][data-part="m"]`).value;
-          draft[i].time = h + ":" + m;
+          const [hour, minute] = el.parentElement.querySelectorAll("select");
+          draft[el.dataset.time].time = hour.value + ":" + minute.value;
         };
       });
       app.querySelectorAll("[data-del]").forEach((el) => {
@@ -318,28 +316,36 @@
       document.getElementById("save").onclick = saveReminders;
     }
 
+    // "09:07" -> "09:05", bad value -> "20:00". Applied once to the draft, so what the
+    // dropdowns show is exactly what gets saved. (The server only stores valid times anyway.)
+    function toFiveMinutes(time) {
+      const match = /^(\d{1,2}):(\d{1,2})$/.exec(time || "");
+      if (!match) return "20:00";
+      const h = Math.min(Number(match[1]), 23);
+      const m = Math.min(Number(match[2]), 59);
+      return pad(h) + ":" + pad(m - (m % 5));
+    }
+
     // Hour + minute dropdowns. The phone's native time picker ignores 5-minute steps,
     // and the cron only runs every 5 minutes, so minutes are 00, 05, ... 55.
     function timeSelects(time, i) {
-      const [h, m] = (time || "20:00").split(":").map(Number);
-      const minute = m - (m % 5);
+      const [h, m] = time.split(":");
       let hours = "";
-      for (let x = 0; x < 24; x++) hours += `<option${x === h ? " selected" : ""}>${pad(x)}</option>`;
+      for (let x = 0; x < 24; x++) hours += `<option${pad(x) === h ? " selected" : ""}>${pad(x)}</option>`;
       let minutes = "";
-      for (let x = 0; x < 60; x += 5) minutes += `<option${x === minute ? " selected" : ""}>${pad(x)}</option>`;
-      return `<select data-time="${i}" data-part="h" aria-label="Hour">${hours}</select>:` +
-        `<select data-time="${i}" data-part="m" aria-label="Minutes">${minutes}</select>`;
+      for (let x = 0; x < 60; x += 5) minutes += `<option${pad(x) === m ? " selected" : ""}>${pad(x)}</option>`;
+      return `<select data-time="${i}" aria-label="Hour">${hours}</select>:` +
+        `<select data-time="${i}" aria-label="Minutes">${minutes}</select>`;
     }
 
     async function saveReminders() {
-      const reminders = draft;
       document.getElementById("save").disabled = true;
       let res, body;
       try {
         res = await fetch("/api/reminders", {
           method: "PUT",
           headers: { Authorization: "tma " + tg.initData, "content-type": "application/json" },
-          body: JSON.stringify({ reminders }),
+          body: JSON.stringify({ reminders: draft }),
         });
         body = await res.json().catch(() => ({}));
       } catch (err) {

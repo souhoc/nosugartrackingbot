@@ -13,8 +13,8 @@ export default defineConfig({
       WEBHOOK_SECRET: bindings.secret(), // random string, also passed to setWebhook
       OWNER_ID: bindings.secret(), // your Telegram user id; only you can /allow and /remove people
     },
-    // Every 30 min. The Worker checks local time and only sends at slot times,
-    // so daylight saving changes need no cron edits.
+    // Every 5 min: reminder times are on 5-minute marks (the Mini App only offers those).
+    // The Worker checks each user's local time, so daylight saving changes need no cron edits.
     triggers: [triggers.scheduled({ schedule: "*/5 * * * *" })],
   },
 });
