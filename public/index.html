@@ -97,12 +97,14 @@
     .page-head h2 { margin: 0; font-size: 20px; font-weight: 700; }
     .rem { background: var(--card); border-radius: 12px; padding: 12px; display: grid; gap: 8px;
       grid-template-columns: 56px minmax(0, 1fr) 44px; }
-    .rem input, .rem textarea {
+    .rem input, .rem textarea, .rem select {
       width: 100%; min-height: 44px; border: 1px solid color-mix(in srgb, var(--hint) 30%, transparent);
       border-radius: 10px; padding: 8px 10px; background: var(--bg); color: var(--text); font: inherit;
       font-size: 16px; /* 16px stops iOS from zooming in */
     }
     .rem .emoji { text-align: center; font-size: 22px; padding: 4px; }
+    .rem .time { display: flex; align-items: center; gap: 4px; min-width: 0; }
+    .rem .time select { flex: 1; min-width: 0; }
     .rem textarea { grid-column: 1 / -1; resize: vertical; }
     .rem .del { background: none; color: var(--hint); font-size: 18px; padding: 0; }
     .note { font-size: 13px; color: var(--hint); margin: 0; }
@@ -274,7 +276,7 @@
       const rows = draft.map((r, i) => `
         <div class="rem">
           <input class="emoji" data-i="${i}" data-k="emoji" value="${esc(r.emoji)}" maxlength="16" aria-label="Emoji">
-          <input type="time" step="300" data-i="${i}" data-k="time" value="${esc(r.time)}" aria-label="Time">
+          <div class="time">${timeSelects(r.time, i)}</div>
           <button class="btn del" data-del="${i}" aria-label="Delete reminder">✕</button>
           <textarea data-i="${i}" data-k="message" rows="2" maxlength="200"
             placeholder="Message I send you" aria-label="Message">${esc(r.message)}</textarea>
@@ -285,7 +287,7 @@
           <button class="btn" id="back" aria-label="Back to calendar">‹</button>
           <h2>Reminders</h2>
         </div>
-        <p class="note">At each reminder I ask if you ate sugar. Times are rounded to 5 minutes.
+        <p class="note">At each reminder I ask if you ate sugar. Times go in 5-minute steps.
           Days with nothing logged don't count and don't break your streak.</p>
         ${rows || '<p class="muted">No reminders.</p>'}
         <button class="btn" id="add" ${draft.length >= data.maxReminders ? "disabled" : ""}>+ Add reminder</button>
@@ -295,6 +297,14 @@
 
       app.querySelectorAll("[data-k]").forEach((el) => {
         el.oninput = () => { draft[el.dataset.i][el.dataset.k] = el.value; };
+      });
+      app.querySelectorAll("[data-time]").forEach((el) => {
+        el.onchange = () => {
+          const i = el.dataset.time;
+          const h = app.querySelector(`[data-time="${i}"][data-part="h"]`).value;
+          const m = app.querySelector(`[data-time="${i}"][data-part="m"]`).value;
+          draft[i].time = h + ":" + m;
+        };
       });
       app.querySelectorAll("[data-del]").forEach((el) => {
         el.onclick = () => { draft.splice(Number(el.dataset.del), 1); saveMsg = ""; render(); };
@@ -308,15 +318,21 @@
       document.getElementById("save").onclick = saveReminders;
     }
 
-    // "09:07" -> "09:05". Keeps HH:MM on a 5-minute mark, like the cron.
-    function roundTime(t) {
-      const [h, m] = (t || "").split(":").map(Number);
-      if (Number.isNaN(h) || Number.isNaN(m)) return t;
-      return pad(h) + ":" + pad(m - (m % 5));
+    // Hour + minute dropdowns. The phone's native time picker ignores 5-minute steps,
+    // and the cron only runs every 5 minutes, so minutes are 00, 05, ... 55.
+    function timeSelects(time, i) {
+      const [h, m] = (time || "20:00").split(":").map(Number);
+      const minute = m - (m % 5);
+      let hours = "";
+      for (let x = 0; x < 24; x++) hours += `<option${x === h ? " selected" : ""}>${pad(x)}</option>`;
+      let minutes = "";
+      for (let x = 0; x < 60; x += 5) minutes += `<option${x === minute ? " selected" : ""}>${pad(x)}</option>`;
+      return `<select data-time="${i}" data-part="h" aria-label="Hour">${hours}</select>:` +
+        `<select data-time="${i}" data-part="m" aria-label="Minutes">${minutes}</select>`;
     }
 
     async function saveReminders() {
-      const reminders = draft.map((r) => ({ ...r, time: roundTime(r.time) }));
+      const reminders = draft;
       document.getElementById("save").disabled = true;
       let res, body;
       try {
