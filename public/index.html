@@ -264,7 +264,7 @@
     // ---------- Reminders editor ----------
 
     function openReminders() {
-      draft = data.reminders.map((r) => ({ ...r, time: toFiveMinutes(r.time) }));
+      draft = data.reminders.map((r) => ({ ...r }));
       saveMsg = "";
       view = "reminders";
       render();
@@ -297,12 +297,13 @@
         el.oninput = () => { draft[el.dataset.i][el.dataset.k] = el.value; };
       });
       app.querySelectorAll("[data-time]").forEach((el) => {
-        // The phone's picker allows any minute. When it closes, snap to 5 minutes
-        // and show it in the field, so what you see is what gets saved.
-        el.onchange = () => {
-          const time = toFiveMinutes(el.value);
-          el.value = time;
-          draft[el.dataset.time].time = time;
+        // The picker allows any minute. The draft follows every edit; when the field is
+        // left (iOS picker closed, desktop focus moves), snap to 5 minutes and show it.
+        // Not on "change": desktop Chrome fires it on each typed digit.
+        el.oninput = () => { draft[el.dataset.time].time = el.value; };
+        el.onblur = () => {
+          el.value = toFiveMinutes(el.value);
+          draft[el.dataset.time].time = el.value;
         };
       });
       app.querySelectorAll("[data-del]").forEach((el) => {
@@ -317,12 +318,14 @@
       document.getElementById("save").onclick = saveReminders;
     }
 
-    // Nearest 5 minutes: "09:07" -> "09:05", "09:08" -> "09:10", "23:58" -> "00:00".
-    // Bad value -> "20:00". The cron runs every 5 minutes, so times must be on a 5-minute mark.
+    // Nearest 5 minutes: "09:07" -> "09:05", "09:08" -> "09:10". Never past 23:55, so a
+    // late reminder stays on the same day. Seconds are ignored. Anything else (e.g. empty)
+    // is returned as is, so the server rejects it with a visible error.
+    // The cron runs every 5 minutes, so times must be on a 5-minute mark.
     function toFiveMinutes(time) {
-      const match = /^(\d{1,2}):(\d{1,2})$/.exec(time || "");
-      if (!match) return "20:00";
-      const total = Math.round((Number(match[1]) * 60 + Number(match[2])) / 5) * 5 % (24 * 60);
+      const match = /^(\d{1,2}):(\d{1,2})(:\d{1,2})?$/.exec(time || "");
+      if (!match) return time;
+      const total = Math.min(Math.round((Number(match[1]) * 60 + Number(match[2])) / 5) * 5, 23 * 60 + 55);
       return pad(Math.floor(total / 60)) + ":" + pad(total % 60);
     }
 
@@ -333,7 +336,7 @@
         res = await fetch("/api/reminders", {
           method: "PUT",
           headers: { Authorization: "tma " + tg.initData, "content-type": "application/json" },
-          body: JSON.stringify({ reminders: draft }),
+          body: JSON.stringify({ reminders: draft.map((r) => ({ ...r, time: toFiveMinutes(r.time) })) }),
         });
         body = await res.json().catch(() => ({}));
       } catch (err) {
