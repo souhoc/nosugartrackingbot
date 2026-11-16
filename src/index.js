@@ -810,7 +810,7 @@ function draw(d) {
 
 // ---------- Stats ----------
 
-// Everything needed to show a user's stats. Users with no reminders get the "gray day" rule.
+// Everything needed to show a user's stats.
 async function userStats(env, userId) {
   const [days, tz, reminders] = await Promise.all([
     loadDays(env, userId),
@@ -818,7 +818,7 @@ async function userStats(env, userId) {
     loadReminders(env, userId),
   ]);
   const today = localNow(Date.now(), tz).date;
-  const stats = computeStats(days, today, reminders.length === 0);
+  const stats = computeStats(days, today);
   return { days, today, tz, reminders, stats };
 }
 
@@ -855,10 +855,9 @@ function dayStatus(day) {
   return sugarCheck || sugarMoment ? "sugar" : "clean";
 }
 
-// emptyIsGray: for users with no reminders, a day with nothing logged is a gray day.
-// It does not count as clean and does not break the streak. Otherwise an empty past day breaks it.
-// Today with nothing logged never breaks the streak.
-function computeStats(days, today, emptyIsGray) {
+// A day with nothing logged is a gray day: it does not count as clean and does not break the streak.
+// Only a sugar day breaks it. Same rule for everyone, so editing reminders never rewrites past streaks.
+function computeStats(days, today) {
   let clean = 0;
   let sugar = 0;
   let refused = 0;
@@ -880,7 +879,7 @@ function computeStats(days, today, emptyIsGray) {
     if (status === "clean") {
       run++;
       best = Math.max(best, run);
-    } else if (status === "sugar" || !emptyIsGray) {
+    } else if (status === "sugar") {
       run = 0;
     }
   }
@@ -891,7 +890,6 @@ function computeStats(days, today, emptyIsGray) {
     const status = dayStatus(days[d]);
     if (status === "clean") streak++;
     else if (status === "sugar") break;
-    else if (d !== today && !emptyIsGray) break;
   }
 
   return { streak, best, clean, sugar, refused };

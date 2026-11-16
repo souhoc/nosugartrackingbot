@@ -42,9 +42,9 @@ Data lives in D1: `users`, `allowlist`, `reminders`, `checks` (one row per user/
 ## Rules
 
 - A day is **sugar** if any check said yes or a sugar moment was logged.
-- A day is **clean** if it has any record and no sugar. **Empty** if nothing logged.
-- Streak = consecutive clean days. Today with nothing logged yet does not break it; an empty past day does.
-- With **no reminders**, an empty day is a gray day: it doesn't count as clean and doesn't break the streak.
+- A day is **clean** if it has any record (answer or moment) and no sugar.
+- A day with nothing logged is **gray**: it doesn't count as clean and doesn't break the streak.
+- Streak = clean days in a row, skipping gray days. Only a sugar day breaks it.
 - Refusals count as wins and show as a dot on the calendar.
 
 ## Deploy your own

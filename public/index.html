@@ -246,22 +246,19 @@
           rows.push({ time: r.time, name: `${esc(r.emoji)} ${esc(r.message)}`, answer: '<span class="muted">Not yet</span>' });
         }
       }
+      // Spontaneous moments go in the same list: one timeline for the day.
+      for (const m of day.moments) {
+        rows.push({
+          time: m.time,
+          name: m.kind === "refused" ? "💪 Refused sugar" : "🍬 Had sugar",
+          answer: m.kind === "refused" ? '<span class="ok">Clean</span>' : '<span class="bad">Sugar</span>',
+        });
+      }
       rows.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-      const checkRows = rows.map((r) =>
+      const list = rows.map((r) =>
         `<div class="row"><span><span class="muted">${esc(r.time)}</span> ${r.name}</span>${r.answer}</div>`).join("");
 
-      let momentRows = "";
-      if (day.moments.length > 0) {
-        momentRows = (checkRows ? "<hr>" : "") + day.moments.map((m) => {
-          const what = m.kind === "refused"
-            ? '<span class="ok">Refused sugar</span>'
-            : '<span class="bad">Had sugar</span>';
-          return `<div class="row"><span>Moment <span class="muted">${esc(m.time)}</span></span>${what}</div>`;
-        }).join("");
-      }
-
-      const empty = !checkRows && !momentRows ? '<span class="muted">Nothing logged.</span>' : "";
-      return `<span class="muted" style="font-size: 13px">${label}</span>${checkRows}${momentRows}${empty}`;
+      return `<span class="muted" style="font-size: 13px">${label}</span>${list || '<span class="muted">Nothing logged.</span>'}`;
     }
 
     // ---------- Reminders editor ----------
@@ -289,7 +286,7 @@
           <h2>Reminders</h2>
         </div>
         <p class="note">At each reminder I ask if you ate sugar. Times are rounded to 5 minutes.
-          With no reminders, days with nothing logged don't count and don't break your streak.</p>
+          Days with nothing logged don't count and don't break your streak.</p>
         ${rows || '<p class="muted">No reminders.</p>'}
         <button class="btn" id="add" ${draft.length >= data.maxReminders ? "disabled" : ""}>+ Add reminder</button>
         <button class="btn primary" id="save">Save</button>

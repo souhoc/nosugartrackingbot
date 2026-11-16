@@ -24,7 +24,7 @@ Telegram bot to track sugar. One Cloudflare Worker + D1 + a static Mini App page
 - Config key for bindings is `env:` (not `bindings:`) with this wrangler version.
 - Time: cron runs every 5 min UTC; each reminder (`reminders` table) is matched in its user's timezone (`users.timezone`). Times must be HH:MM on a 5-minute mark. Use `controller.scheduledTime`, not `Date.now()`, in `scheduled`.
 - Reminders: each user has their own (time, emoji, message), max 12. New users pick defaults / custom (Mini App `?view=reminders`) / none; `users.onboarded` marks it done.
-- With no reminders, an empty day is gray: not clean, doesn't break the streak (`computeStats` `emptyIsGray`).
+- An empty day is gray for everyone: not clean, doesn't break the streak. Only sugar breaks it (`computeStats`). Reminder answers (`checks`) and taps (`moments`) count the same for a day.
 - Dates stored as the user's local `YYYY-MM-DD`. Callback data is `date|slot|0or1` (`slot` = `r<reminder id>`, or old `morning|lunch|break|dinner`), so late answers count for the asked day. Checks store a copy of the reminder's time/emoji/message.
 - Access: owner = `OWNER_ID` secret, always allowed. Others via `allowlist` table, managed with `/allow`, `/remove`, `/users` (owner only). Every query must filter by `user_id`.
 - Webhook always returns 200 (else Telegram retries forever); errors are logged.
