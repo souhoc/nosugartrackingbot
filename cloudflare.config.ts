@@ -15,6 +15,6 @@ export default defineConfig({
     },
     // Every 30 min. The Worker checks local time and only sends at slot times,
     // so daylight saving changes need no cron edits.
-    triggers: [triggers.scheduled({ schedule: "*/30 * * * *" })],
+    triggers: [triggers.scheduled({ schedule: "*/5 * * * *" })],
   },
 });

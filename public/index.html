@@ -82,6 +82,33 @@
     .detail .bad { color: #b4401f; font-weight: 600; }
     .detail hr { border: 0; border-top: 1px solid color-mix(in srgb, var(--hint) 25%, transparent); margin: 4px 0; width: 100%; }
 
+    .detail .row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail .row > span:last-child { flex-shrink: 0; white-space: nowrap; }
+
+    .btn {
+      min-height: 44px; border: 0; border-radius: 12px; padding: 0 16px;
+      font: inherit; font-weight: 600; cursor: pointer;
+      background: var(--card); color: var(--text);
+    }
+    .btn.primary { background: var(--tg-theme-button-color, #2f80ed); color: var(--tg-theme-button-text-color, #fff); }
+    .btn:disabled { opacity: 0.5; }
+
+    .page-head { display: flex; align-items: center; gap: 12px; }
+    .page-head h2 { margin: 0; font-size: 20px; font-weight: 700; }
+    .rem { background: var(--card); border-radius: 12px; padding: 12px; display: grid; gap: 8px;
+      grid-template-columns: 56px minmax(0, 1fr) 44px; }
+    .rem input, .rem textarea {
+      width: 100%; min-height: 44px; border: 1px solid color-mix(in srgb, var(--hint) 30%, transparent);
+      border-radius: 10px; padding: 8px 10px; background: var(--bg); color: var(--text); font: inherit;
+      font-size: 16px; /* 16px stops iOS from zooming in */
+    }
+    .rem .emoji { text-align: center; font-size: 22px; padding: 4px; }
+    .rem textarea { grid-column: 1 / -1; resize: vertical; }
+    .rem .del { background: none; color: var(--hint); font-size: 18px; padding: 0; }
+    .note { font-size: 13px; color: var(--hint); margin: 0; }
+    .msg { font-size: 14px; margin: 0; }
+    .msg.err { color: #b4401f; }
+
     @media (prefers-color-scheme: dark) {
       :root:not([data-theme="light"]) { --clean: #2fa36b; }
       :root:not([data-theme="light"]) .detail .bad { color: #f6a58c; }
@@ -100,6 +127,9 @@
     let data = null;
     let viewYear, viewMonth; // month shown (0-based month)
     let selected = null;
+    let view = new URLSearchParams(location.search).get("view") === "reminders" ? "reminders" : "calendar";
+    let draft = []; // reminders being edited
+    let saveMsg = "";
 
     const FLAME =
       '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" ' +
@@ -121,7 +151,13 @@
       viewYear = y;
       viewMonth = m - 1;
       selected = data.today;
-      render();
+      if (view === "reminders") openReminders();
+      else render();
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     }
 
     function pad(n) { return String(n).padStart(2, "0"); }
@@ -132,6 +168,7 @@
     }
 
     function render() {
+      if (view === "reminders") return renderReminders();
       const first = new Date(Date.UTC(viewYear, viewMonth, 1));
       const daysInMonth = new Date(Date.UTC(viewYear, viewMonth + 1, 0)).getUTCDate();
       const offset = (first.getUTCDay() + 6) % 7; // Monday first
@@ -169,11 +206,14 @@
         <div class="legend">
           <span><span class="sw" style="background: var(--clean)"></span>Clean</span>
           <span><span class="sw" style="background: var(--sugar)"></span>Sugar</span>
-          <span><span class="sw" style="background: var(--empty)"></span>No answer</span>
+          <span><span class="sw" style="background: var(--empty)"></span>Nothing logged</span>
           <span><span class="dot"></span>Refused sugar</span>
         </div>
         <div class="detail">${detailHtml(selected)}</div>
+        <button class="btn" id="edit-reminders">⏰ Reminders (${data.reminders.length})</button>
       `;
+
+      document.getElementById("edit-reminders").onclick = openReminders;
 
       document.getElementById("prev").onclick = () => moveMonth(-1);
       document.getElementById("next").onclick = () => moveMonth(1);
@@ -183,32 +223,117 @@
     }
 
     function detailHtml(date) {
-      const day = data.calendar[date] || { slots: {}, moments: [] };
+      const day = data.calendar[date] || { checks: [], moments: [] };
       const label = new Date(date + "T00:00:00Z").toLocaleDateString("en-US", {
         weekday: "long", month: "short", day: "numeric", timeZone: "UTC",
       });
-      const isPast = date < data.today;
 
-      const slotRows = data.slots.map((s) => {
-        const v = day.slots[s.id];
-        let answer;
-        if (v === 0) answer = '<span class="ok">Clean</span>';
-        else if (v === 1) answer = '<span class="bad">Sugar</span>';
-        else answer = `<span class="muted">${isPast ? "No answer" : "Not yet"}</span>`;
-        return `<div class="row"><span>${s.label} <span class="muted">${s.time}</span></span>${answer}</div>`;
-      });
+      // Answered checks keep the reminder text they had when answered.
+      const rows = day.checks.map((c) => ({
+        time: c.time || "",
+        name: `${esc(c.emoji)} ${esc(c.message)}`,
+        answer: c.sugar === 1 ? '<span class="bad">Sugar</span>' : '<span class="ok">Clean</span>',
+      }));
+      // Today: also show reminders not answered yet.
+      if (date === data.today) {
+        const answered = new Set(day.checks.map((c) => c.slot));
+        for (const r of data.reminders) {
+          if (answered.has("r" + r.id)) continue;
+          rows.push({ time: r.time, name: `${esc(r.emoji)} ${esc(r.message)}`, answer: '<span class="muted">Not yet</span>' });
+        }
+      }
+      rows.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+      const checkRows = rows.map((r) =>
+        `<div class="row"><span><span class="muted">${esc(r.time)}</span> ${r.name}</span>${r.answer}</div>`).join("");
 
       let momentRows = "";
       if (day.moments.length > 0) {
-        momentRows = "<hr>" + day.moments.map((m) => {
+        momentRows = (checkRows ? "<hr>" : "") + day.moments.map((m) => {
           const what = m.kind === "refused"
             ? '<span class="ok">Refused sugar</span>'
             : '<span class="bad">Had sugar</span>';
-          return `<div class="row"><span>Moment <span class="muted">${m.time}</span></span>${what}</div>`;
+          return `<div class="row"><span>Moment <span class="muted">${esc(m.time)}</span></span>${what}</div>`;
         }).join("");
       }
 
-      return `<span class="muted" style="font-size: 13px">${label}</span>${slotRows.join("")}${momentRows}`;
+      const empty = !checkRows && !momentRows ? '<span class="muted">Nothing logged.</span>' : "";
+      return `<span class="muted" style="font-size: 13px">${label}</span>${checkRows}${momentRows}${empty}`;
+    }
+
+    // ---------- Reminders editor ----------
+
+    function openReminders() {
+      draft = data.reminders.map((r) => ({ ...r }));
+      saveMsg = "";
+      view = "reminders";
+      render();
+    }
+
+    function renderReminders() {
+      const rows = draft.map((r, i) => `
+        <div class="rem">
+          <input class="emoji" data-i="${i}" data-k="emoji" value="${esc(r.emoji)}" maxlength="16" aria-label="Emoji">
+          <input type="time" step="300" data-i="${i}" data-k="time" value="${esc(r.time)}" aria-label="Time">
+          <button class="btn del" data-del="${i}" aria-label="Delete reminder">✕</button>
+          <textarea data-i="${i}" data-k="message" rows="2" maxlength="200"
+            placeholder="Message I send you" aria-label="Message">${esc(r.message)}</textarea>
+        </div>`).join("");
+
+      app.innerHTML = `
+        <div class="page-head">
+          <button class="btn" id="back" aria-label="Back to calendar">‹</button>
+          <h2>Reminders</h2>
+        </div>
+        <p class="note">At each reminder I ask if you ate sugar. Times are rounded to 5 minutes.
+          With no reminders, days with nothing logged don't count and don't break your streak.</p>
+        ${rows || '<p class="muted">No reminders.</p>'}
+        <button class="btn" id="add" ${draft.length >= 12 ? "disabled" : ""}>+ Add reminder</button>
+        <button class="btn primary" id="save">Save</button>
+        ${saveMsg}
+      `;
+
+      app.querySelectorAll("[data-k]").forEach((el) => {
+        el.oninput = () => { draft[el.dataset.i][el.dataset.k] = el.value; };
+      });
+      app.querySelectorAll("[data-del]").forEach((el) => {
+        el.onclick = () => { draft.splice(Number(el.dataset.del), 1); saveMsg = ""; render(); };
+      });
+      document.getElementById("add").onclick = () => {
+        draft.push({ time: "20:00", emoji: "⏰", message: "Did you eat sugar since the last check?" });
+        saveMsg = "";
+        render();
+      };
+      document.getElementById("back").onclick = () => { view = "calendar"; render(); };
+      document.getElementById("save").onclick = saveReminders;
+    }
+
+    // "09:07" -> "09:05". Keeps HH:MM on a 5-minute mark, like the cron.
+    function roundTime(t) {
+      const [h, m] = (t || "").split(":").map(Number);
+      if (Number.isNaN(h) || Number.isNaN(m)) return t;
+      return pad(h) + ":" + pad(m - (m % 5));
+    }
+
+    async function saveReminders() {
+      const reminders = draft.map((r) => ({ ...r, time: roundTime(r.time) }));
+      const btn = document.getElementById("save");
+      btn.disabled = true;
+      const res = await fetch("/api/reminders", {
+        method: "PUT",
+        headers: { Authorization: "tma " + tg.initData, "content-type": "application/json" },
+        body: JSON.stringify({ reminders }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        saveMsg = `<p class="msg err">Not saved: ${esc(body.error || res.status)}</p>`;
+        render();
+        return;
+      }
+      data.reminders = body.reminders;
+      draft = body.reminders.map((r) => ({ ...r }));
+      saveMsg = '<p class="msg">✅ Saved. I sent you the list in the chat.</p>';
+      tg?.HapticFeedback?.notificationOccurred("success");
+      render();
     }
 
     function moveMonth(delta) {
