@@ -32,3 +32,10 @@ UPDATE checks SET time = '10:00', emoji = '☀️', message = 'Morning check: di
 UPDATE checks SET time = '12:30', emoji = '🥗', message = 'Lunch check: did you eat sugar since the last check?' WHERE slot = 'lunch';
 UPDATE checks SET time = '16:00', emoji = '☕', message = 'Break check: did you eat sugar since the last check?' WHERE slot = 'break';
 UPDATE checks SET time = '19:00', emoji = '🍽️', message = 'Dinner check: did you eat sugar since the last check?' WHERE slot = 'dinner';
+
+-- Point old answers at the migrated reminder (same user, same time), so a day never shows
+-- "morning" answered and the new 10:00 reminder as "Not yet".
+UPDATE checks SET slot = 'r' || (
+  SELECT MIN(r.id) FROM reminders r WHERE r.user_id = checks.user_id AND r.time = checks.time
+)
+WHERE slot IN ('morning', 'lunch', 'break', 'dinner');

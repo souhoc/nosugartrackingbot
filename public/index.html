@@ -141,7 +141,7 @@
         app.innerHTML = '<p class="muted">Open this page from the Telegram bot.</p>';
         return;
       }
-      const res = await fetch("/api/stats", { headers: { Authorization: "tma " + tg.initData } });
+      const res = await fetchStats();
       if (!res.ok) {
         app.innerHTML = '<p class="muted">Not authorized (' + res.status + ").</p>";
         return;
@@ -153,6 +153,10 @@
       selected = data.today;
       if (view === "reminders") openReminders();
       else render();
+    }
+
+    function fetchStats() {
+      return fetch("/api/stats", { headers: { Authorization: "tma " + tg.initData } });
     }
 
     function esc(s) {
@@ -287,7 +291,7 @@
         <p class="note">At each reminder I ask if you ate sugar. Times are rounded to 5 minutes.
           With no reminders, days with nothing logged don't count and don't break your streak.</p>
         ${rows || '<p class="muted">No reminders.</p>'}
-        <button class="btn" id="add" ${draft.length >= 12 ? "disabled" : ""}>+ Add reminder</button>
+        <button class="btn" id="add" ${draft.length >= data.maxReminders ? "disabled" : ""}>+ Add reminder</button>
         <button class="btn primary" id="save">Save</button>
         ${saveMsg}
       `;
@@ -316,19 +320,29 @@
 
     async function saveReminders() {
       const reminders = draft.map((r) => ({ ...r, time: roundTime(r.time) }));
-      const btn = document.getElementById("save");
-      btn.disabled = true;
-      const res = await fetch("/api/reminders", {
-        method: "PUT",
-        headers: { Authorization: "tma " + tg.initData, "content-type": "application/json" },
-        body: JSON.stringify({ reminders }),
-      });
-      const body = await res.json().catch(() => ({}));
+      document.getElementById("save").disabled = true;
+      let res, body;
+      try {
+        res = await fetch("/api/reminders", {
+          method: "PUT",
+          headers: { Authorization: "tma " + tg.initData, "content-type": "application/json" },
+          body: JSON.stringify({ reminders }),
+        });
+        body = await res.json().catch(() => ({}));
+      } catch (err) {
+        console.error(err);
+        saveMsg = '<p class="msg err">Not saved: no connection. Try again.</p>';
+        render(); // keeps the draft, re-enables Save
+        return;
+      }
       if (!res.ok) {
         saveMsg = `<p class="msg err">Not saved: ${esc(body.error || res.status)}</p>`;
         render();
         return;
       }
+      // Streaks depend on the reminder count (gray days), so reload the stats too.
+      const fresh = await fetchStats().catch(() => null);
+      if (fresh?.ok) data = await fresh.json();
       data.reminders = body.reminders;
       draft = body.reminders.map((r) => ({ ...r }));
       saveMsg = '<p class="msg">✅ Saved. I sent you the list in the chat.</p>';

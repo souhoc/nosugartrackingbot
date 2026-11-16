@@ -341,18 +341,32 @@ async function handleSetupChoice(query, env, url) {
   const userId = query.from.id;
   const choice = query.data.split("|")[1];
 
-  const statements = [env.DB.prepare("UPDATE users SET onboarded = 1 WHERE user_id = ?").bind(userId)];
-  // Don't add the defaults twice if the button is tapped again.
-  const hasReminders = (await loadReminders(env, userId)).length > 0;
-  if (choice === "default" && !hasReminders) {
+  // Old onboarding message tapped after the user already chose (e.g. saved custom reminders).
+  if (await isOnboarded(env, userId)) {
+    console.log("setup choice ignored, already onboarded", { userId, choice });
+    await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
+    await tg(env, "editMessageText", {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+      text: "Your reminders are already set. Change them with /reminders.",
+    });
+    return;
+  }
+
+  // One batch = one transaction. Each insert checks `onboarded` itself, so a double tap
+  // (two callbacks at once) can't add the defaults twice.
+  const statements = [];
+  if (choice === "default") {
     for (const r of DEFAULT_REMINDERS) {
       statements.push(
-        env.DB.prepare("INSERT INTO reminders (user_id, time, emoji, message) VALUES (?, ?, ?, ?)").bind(
-          userId, r.time, r.emoji, r.message
-        )
+        env.DB.prepare(
+          `INSERT INTO reminders (user_id, time, emoji, message) SELECT ?, ?, ?, ?
+           WHERE NOT EXISTS (SELECT 1 FROM users WHERE user_id = ? AND onboarded = 1)`
+        ).bind(userId, r.time, r.emoji, r.message, userId)
       );
     }
   }
+  statements.push(env.DB.prepare("UPDATE users SET onboarded = 1 WHERE user_id = ?").bind(userId));
   await env.DB.batch(statements);
   console.log("setup choice", { userId, choice });
 
@@ -594,7 +608,7 @@ async function handleStats(request, env) {
     calendar[date] = { status: dayStatus(day), checks: day.checks, moments: day.moments };
   }
 
-  return Response.json({ today, reminders, calendar, ...stats });
+  return Response.json({ today, reminders, maxReminders: MAX_REMINDERS, calendar, ...stats });
 }
 
 // Telegram Mini App initData check:

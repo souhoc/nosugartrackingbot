@@ -15,7 +15,7 @@ One Worker (`src/index.js`) does everything:
 
 | Part | What it does |
 | --- | --- |
-| `scheduled` (cron every 5 min) | Sends each reminder whose time matches its user's local time. DST-safe. |
+| `scheduled` (cron every 5 min) | Sends each reminder whose time matches its user's local time. Follows DST, but a reminder inside the skipped/repeated hour (often 02:00–03:00) is skipped or sent twice on those 2 days. |
 | `POST /webhook` | Telegram updates: answer buttons, moments, commands. Checked with a secret header. |
 | `GET /api/stats` | Calendar data for the Mini App. Checked with Telegram `initData` (HMAC). |
 | `PUT /api/reminders` | Save the user's reminders from the Mini App. Same `initData` check. |
