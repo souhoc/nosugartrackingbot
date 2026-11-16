@@ -1,13 +1,17 @@
-// No-sugar bot: asks 4 times a day, records answers and moments, serves a calendar Mini App.
+// No-sugar bot: asks at each user's own reminder times, records answers and moments, serves a calendar Mini App.
 // Multi-user: the owner (OWNER_ID) plus anyone the owner added with /allow.
-// Each user has their own data and timezone.
+// Each user has their own data, timezone and reminders.
 
-const SLOTS = [
-  { id: "morning", time: "10:00", label: "Morning", emoji: "☀️" },
-  { id: "lunch", time: "12:30", label: "Lunch", emoji: "🥗" },
-  { id: "break", time: "16:00", label: "Break", emoji: "☕" },
-  { id: "dinner", time: "19:00", label: "Dinner", emoji: "🍽️" },
+// Offered to new users ("Use the defaults"). The `slot` ids are what old checks (before custom reminders) used.
+const DEFAULT_REMINDERS = [
+  { slot: "morning", time: "10:00", emoji: "☀️", message: "Morning check: did you eat sugar since the last check?" },
+  { slot: "lunch", time: "12:30", emoji: "🥗", message: "Lunch check: did you eat sugar since the last check?" },
+  { slot: "break", time: "16:00", emoji: "☕", message: "Break check: did you eat sugar since the last check?" },
+  { slot: "dinner", time: "19:00", emoji: "🍽️", message: "Dinner check: did you eat sugar since the last check?" },
 ];
+const MAX_REMINDERS = 12;
+// Cron runs every 5 min, so reminder times must be on a 5-minute mark.
+const TIME_RE = /^([01]\d|2[0-3]):[0-5][05]$/;
 
 const BTN_REFUSED = "💪 Refused sugar";
 const BTN_SUGAR = "🍬 Had sugar";
@@ -21,29 +25,32 @@ export default {
     if (url.pathname === "/api/stats") {
       return handleStats(request, env);
     }
+    if (url.pathname === "/api/reminders" && request.method === "PUT") {
+      return handleSaveReminders(request, env, url);
+    }
     if (url.pathname === "/api/widget") {
       return handleWidget(request, env);
     }
     return new Response("Not found", { status: 404 });
   },
 
-  // Runs every 30 min. Each user gets a question when THEIR local time matches a slot.
+  // Runs every 5 min. Sends each reminder whose time matches its user's local time.
   async scheduled(controller, env) {
-    // Only users still allowed: the owner, or present in the allowlist.
-    const { results: users } = await env.DB.prepare(
-      `SELECT user_id, timezone FROM users
-       WHERE user_id = ? OR user_id IN (SELECT user_id FROM allowlist)`
+    // Only reminders of users still allowed: the owner, or present in the allowlist.
+    const { results: reminders } = await env.DB.prepare(
+      `SELECT r.id, r.user_id, r.time, r.emoji, r.message, u.timezone
+       FROM reminders r JOIN users u ON u.user_id = r.user_id
+       WHERE r.user_id = ? OR r.user_id IN (SELECT user_id FROM allowlist)`
     )
       .bind(Number(env.OWNER_ID))
       .all();
 
-    for (const user of users) {
-      const { date, time } = localNow(controller.scheduledTime, user.timezone);
-      const slot = SLOTS.find((s) => s.time === time);
-      if (!slot) continue;
+    for (const reminder of reminders) {
+      const { date, time } = localNow(controller.scheduledTime, reminder.timezone);
+      if (time !== reminder.time) continue;
 
-      console.log("sending reminder", { userId: user.user_id, date, slot: slot.id });
-      await sendQuestion(env, user.user_id, date, slot);
+      console.log("sending reminder", { userId: reminder.user_id, date, reminderId: reminder.id });
+      await sendQuestion(env, reminder, date);
     }
   },
 };
@@ -126,6 +133,11 @@ async function userTimezone(env, userId) {
   return row?.timezone || env.TIMEZONE;
 }
 
+async function isOnboarded(env, userId) {
+  const row = await env.DB.prepare("SELECT onboarded FROM users WHERE user_id = ?").bind(userId).first();
+  return row?.onboarded === 1;
+}
+
 function isValidTimezone(tz) {
   try {
     new Intl.DateTimeFormat("en", { timeZone: tz });
@@ -133,6 +145,109 @@ function isValidTimezone(tz) {
   } catch {
     return false;
   }
+}
+
+// ---------- Reminders ----------
+
+async function loadReminders(env, userId) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, time, emoji, message FROM reminders WHERE user_id = ? ORDER BY time, id"
+  )
+    .bind(userId)
+    .all();
+  return results;
+}
+
+// What a check row stores about its reminder, so history keeps its label after edits or deletes.
+// `slot` is "r<id>" for custom reminders, or an old default id ("morning", ...) from before.
+async function reminderSnapshot(env, userId, slot) {
+  if (slot.startsWith("r")) {
+    const row = await env.DB.prepare("SELECT time, emoji, message FROM reminders WHERE id = ? AND user_id = ?")
+      .bind(Number(slot.slice(1)), userId)
+      .first();
+    if (row) return row;
+  }
+  const old = DEFAULT_REMINDERS.find((d) => d.slot === slot);
+  if (old) return old;
+  return { time: null, emoji: "⏰", message: "Deleted reminder" };
+}
+
+function reminderListText(reminders, tz) {
+  if (reminders.length === 0) return "You have no reminders.";
+  const lines = reminders.map((r) => `${r.time} ${r.emoji} ${r.message}`);
+  return `Your reminders (${tz}):\n${lines.join("\n")}`;
+}
+
+// Returns an error string, or null if the list is fine.
+function validateReminders(list) {
+  if (!Array.isArray(list)) return "reminders must be a list";
+  if (list.length > MAX_REMINDERS) return `at most ${MAX_REMINDERS} reminders`;
+  for (const r of list) {
+    if (!TIME_RE.test(r?.time || "")) return `bad time "${r?.time}", use HH:MM on a 5-minute mark`;
+    const emoji = String(r.emoji || "").trim();
+    if (emoji.length > 16) return "emoji too long";
+    const message = String(r.message || "").trim();
+    if (message.length === 0) return "message is empty";
+    if (message.length > 200) return "message is longer than 200 characters";
+  }
+  return null;
+}
+
+// Mini App save: the whole list is sent. Known ids are updated, new ones inserted, missing ones deleted.
+// Ids are kept so today's already-sent questions still match their reminder.
+async function handleSaveReminders(request, env, url) {
+  const user = await miniAppUser(request, env);
+  if (!user) {
+    console.warn("save reminders: unauthorized");
+    return Response.json({ error: "unauthorized" }, { status: 403 });
+  }
+
+  const body = await request.json().catch(() => null);
+  const list = body?.reminders;
+  const error = validateReminders(list);
+  if (error) {
+    console.warn("save reminders: invalid", user.id, error);
+    return Response.json({ error }, { status: 400 });
+  }
+
+  const existing = new Set((await loadReminders(env, user.id)).map((r) => r.id));
+  const kept = new Set();
+  const statements = [];
+  for (const r of list) {
+    const emoji = String(r.emoji || "").trim() || "⏰";
+    const message = String(r.message).trim();
+    if (existing.has(r.id) && !kept.has(r.id)) {
+      kept.add(r.id);
+      statements.push(
+        env.DB.prepare("UPDATE reminders SET time = ?, emoji = ?, message = ? WHERE id = ? AND user_id = ?").bind(
+          r.time, emoji, message, r.id, user.id
+        )
+      );
+    } else {
+      statements.push(
+        env.DB.prepare("INSERT INTO reminders (user_id, time, emoji, message) VALUES (?, ?, ?, ?)").bind(
+          user.id, r.time, emoji, message
+        )
+      );
+    }
+  }
+  for (const id of existing) {
+    if (!kept.has(id)) {
+      statements.push(env.DB.prepare("DELETE FROM reminders WHERE id = ? AND user_id = ?").bind(id, user.id));
+    }
+  }
+  const wasOnboarded = await isOnboarded(env, user.id);
+  statements.push(env.DB.prepare("UPDATE users SET onboarded = 1 WHERE user_id = ?").bind(user.id));
+  await env.DB.batch(statements);
+
+  const reminders = await loadReminders(env, user.id);
+  const tz = await userTimezone(env, user.id);
+  console.log("reminders saved", { userId: user.id, count: reminders.length, firstTime: !wasOnboarded });
+
+  await tg(env, "sendMessage", { chat_id: user.id, text: `⏰ Saved. ${reminderListText(reminders, tz)}` });
+  if (!wasOnboarded) await sendWelcome(env, user.id, url.origin);
+
+  return Response.json({ reminders });
 }
 
 // ---------- Telegram webhook ----------
@@ -147,7 +262,7 @@ async function handleWebhook(request, env, url) {
   const update = await request.json();
   try {
     if (update.callback_query) {
-      await handleAnswer(update.callback_query, env);
+      await handleCallback(update.callback_query, env, url);
     } else if (update.message) {
       await handleMessage(update.message, env, url);
     }
@@ -158,30 +273,39 @@ async function handleWebhook(request, env, url) {
   return new Response("ok");
 }
 
-async function handleAnswer(query, env) {
+async function handleCallback(query, env, url) {
   const userId = query.from.id;
   if (!(await isAllowed(env, userId))) {
-    console.warn("answer from non-allowed user", userId);
+    console.warn("callback from non-allowed user", userId);
     await tg(env, "answerCallbackQuery", { callback_query_id: query.id, text: "This bot is private." });
     return;
   }
 
-  const [date, slotId, sugarFlag] = query.data.split("|");
-  const slot = SLOTS.find((s) => s.id === slotId);
+  if (query.data.startsWith("setup|")) {
+    await handleSetupChoice(query, env, url);
+  } else {
+    await handleAnswer(query, env);
+  }
+}
+
+// Callback data: "date|slot|0or1". Late answers count for the asked day.
+async function handleAnswer(query, env) {
+  const userId = query.from.id;
+  const [date, slot, sugarFlag] = query.data.split("|");
   const ateSugar = sugarFlag === "1";
+  const snap = await reminderSnapshot(env, userId, slot);
 
   await env.DB.prepare(
-    `INSERT INTO checks (user_id, date, slot, sugar, answered_at) VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO checks (user_id, date, slot, sugar, answered_at, time, emoji, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (user_id, date, slot) DO UPDATE SET sugar = excluded.sugar, answered_at = excluded.answered_at`
   )
-    .bind(userId, date, slotId, ateSugar ? 1 : 0, new Date().toISOString())
+    .bind(userId, date, slot, ateSugar ? 1 : 0, new Date().toISOString(), snap.time, snap.emoji, snap.message)
     .run();
-  console.log("recorded answer", { userId, date, slot: slotId, ateSugar });
+  console.log("recorded answer", { userId, date, slot, ateSugar });
 
-  const tz = await userTimezone(env, userId);
-  const stats = computeStats(await loadDays(env, userId), localNow(Date.now(), tz).date);
+  const { stats } = await userStats(env, userId);
   const result = ateSugar ? "🍬 had sugar" : "✅ no sugar";
-  const text = `${slot.emoji} ${slot.label} (${date}): ${result}\n🔥 Streak: ${stats.streak} day(s)`;
+  const text = `${snap.emoji} ${snap.message}\n→ ${result} (${date})\n🔥 Streak: ${stats.streak} day(s)`;
 
   await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
   await tg(env, "editMessageText", {
@@ -190,6 +314,73 @@ async function handleAnswer(query, env) {
     text,
   });
 }
+
+// ---------- Onboarding: new users pick their reminders ----------
+
+async function sendSetupChoice(env, userId, origin) {
+  const defaults = DEFAULT_REMINDERS.map((r) => `${r.time} ${r.emoji}`).join(", ");
+  await tg(env, "sendMessage", {
+    chat_id: userId,
+    text:
+      "👋 Welcome! First, pick your reminders. At each one I ask if you ate sugar.\n\n" +
+      `✅ Defaults: ${defaults}\n` +
+      "✏️ Customize: your own times, emojis and messages\n" +
+      "🔕 None: you only log moments yourself\n\n" +
+      "You can change this any time with /reminders.",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "✅ Use the defaults", callback_data: "setup|default" }],
+        [{ text: "✏️ Customize", web_app: { url: `${origin}/?view=reminders` } }],
+        [{ text: "🔕 No reminders", callback_data: "setup|none" }],
+      ],
+    },
+  });
+}
+
+async function handleSetupChoice(query, env, url) {
+  const userId = query.from.id;
+  const choice = query.data.split("|")[1];
+
+  // Old onboarding message tapped after the user already chose (e.g. saved custom reminders).
+  if (await isOnboarded(env, userId)) {
+    console.log("setup choice ignored, already onboarded", { userId, choice });
+    await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
+    await tg(env, "editMessageText", {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+      text: "Your reminders are already set. Change them with /reminders.",
+    });
+    return;
+  }
+
+  // One batch = one transaction. Each insert checks `onboarded` itself, so a double tap
+  // (two callbacks at once) can't add the defaults twice.
+  const statements = [];
+  if (choice === "default") {
+    for (const r of DEFAULT_REMINDERS) {
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO reminders (user_id, time, emoji, message) SELECT ?, ?, ?, ?
+           WHERE NOT EXISTS (SELECT 1 FROM users WHERE user_id = ? AND onboarded = 1)`
+        ).bind(userId, r.time, r.emoji, r.message, userId)
+      );
+    }
+  }
+  statements.push(env.DB.prepare("UPDATE users SET onboarded = 1 WHERE user_id = ?").bind(userId));
+  await env.DB.batch(statements);
+  console.log("setup choice", { userId, choice });
+
+  const done = choice === "default" ? "✅ Using the default reminders." : "🔕 No reminders.";
+  await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
+  await tg(env, "editMessageText", {
+    chat_id: query.message.chat.id,
+    message_id: query.message.message_id,
+    text: `${done} Change them any time with /reminders.`,
+  });
+  await sendWelcome(env, userId, url.origin);
+}
+
+// ---------- Messages ----------
 
 async function handleMessage(message, env, url) {
   const chatId = message.chat.id;
@@ -233,6 +424,18 @@ async function handleMessage(message, env, url) {
     await undoMoment(env, from.id);
     return;
   }
+  if (text.startsWith("/reminders")) {
+    const reminders = await loadReminders(env, from.id);
+    const tz = await userTimezone(env, from.id);
+    await tg(env, "sendMessage", {
+      chat_id: chatId,
+      text: reminderListText(reminders, tz),
+      reply_markup: {
+        inline_keyboard: [[{ text: "✏️ Edit reminders", web_app: { url: `${url.origin}/?view=reminders` } }]],
+      },
+    });
+    return;
+  }
   if (text.startsWith("/widget")) {
     await sendWidgetScript(env, from.id, url.origin);
     return;
@@ -243,8 +446,7 @@ async function handleMessage(message, env, url) {
   }
 
   if (text.startsWith("/stats")) {
-    const tz = await userTimezone(env, from.id);
-    const stats = computeStats(await loadDays(env, from.id), localNow(Date.now(), tz).date);
+    const { stats } = await userStats(env, from.id);
     await tg(env, "sendMessage", {
       chat_id: chatId,
       text:
@@ -255,16 +457,27 @@ async function handleMessage(message, env, url) {
     return;
   }
 
-  // /start or anything else: show the moment keyboard and the calendar button.
-  const tz = await userTimezone(env, from.id);
+  // /start or anything else: new users pick their reminders first, others get the welcome.
+  if (!(await isOnboarded(env, from.id))) {
+    console.log("onboarding user", from.id);
+    await sendSetupChoice(env, from.id, url.origin);
+    return;
+  }
+  await sendWelcome(env, from.id, url.origin);
+}
+
+// The moment keyboard, the reminder list and the calendar button.
+async function sendWelcome(env, userId, origin) {
+  const reminders = await loadReminders(env, userId);
+  const tz = await userTimezone(env, userId);
   await tg(env, "sendMessage", {
-    chat_id: chatId,
+    chat_id: userId,
     text:
-      `I'll ask you at 10:00, 12:30, 16:00 and 19:00 (${tz}) if you ate sugar.\n\n` +
+      `${reminderListText(reminders, tz)}\n\n` +
       "Any time, tap a button below to log a moment:\n" +
       `${BTN_REFUSED}: you said no to sugar\n` +
       `${BTN_SUGAR}: you had some\n\n` +
-      "/undo removes the last moment, /stats gives a summary, " +
+      "/reminders changes your reminders, /undo removes the last moment, /stats gives a summary, " +
       "/timezone Area/City changes your timezone, /widget gives an iPhone widget (Scriptable).",
     reply_markup: {
       keyboard: [[{ text: BTN_REFUSED }, { text: BTN_SUGAR }]],
@@ -273,10 +486,10 @@ async function handleMessage(message, env, url) {
     },
   });
   await tg(env, "sendMessage", {
-    chat_id: chatId,
+    chat_id: userId,
     text: "Your calendar:",
     reply_markup: {
-      inline_keyboard: [[{ text: "📅 Open calendar", web_app: { url: `${url.origin}/` } }]],
+      inline_keyboard: [[{ text: "📅 Open calendar", web_app: { url: `${origin}/` } }]],
     },
   });
 }
@@ -315,7 +528,7 @@ async function logMoment(env, userId, kind) {
     .run();
   console.log("logged moment", { userId, date, time, kind });
 
-  const stats = computeStats(await loadDays(env, userId), date);
+  const { stats } = await userStats(env, userId);
   const text =
     kind === "refused"
       ? `💪 Nice, logged at ${time}. You've refused sugar ${stats.refused} time(s).\n🔥 Streak: ${stats.streak} day(s)`
@@ -343,15 +556,15 @@ async function undoMoment(env, userId) {
   });
 }
 
-async function sendQuestion(env, userId, date, slot) {
+async function sendQuestion(env, reminder, date) {
   await tg(env, "sendMessage", {
-    chat_id: userId,
-    text: `${slot.emoji} ${slot.label} check: did you eat sugar since the last check?`,
+    chat_id: reminder.user_id,
+    text: `${reminder.emoji} ${reminder.message}`,
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "✅ No sugar", callback_data: `${date}|${slot.id}|0` },
-          { text: "🍬 I had sugar", callback_data: `${date}|${slot.id}|1` },
+          { text: "✅ No sugar", callback_data: `${date}|r${reminder.id}|0` },
+          { text: "🍬 I had sugar", callback_data: `${date}|r${reminder.id}|1` },
         ],
       ],
     },
@@ -372,26 +585,30 @@ async function tg(env, method, body) {
 
 // ---------- Mini App API ----------
 
-async function handleStats(request, env) {
+// The Telegram user behind a Mini App request, or null if not valid or not allowed.
+async function miniAppUser(request, env) {
   const auth = request.headers.get("Authorization") || "";
   const initData = auth.startsWith("tma ") ? auth.slice(4) : "";
   const user = await checkInitData(initData, env.BOT_TOKEN);
+  if (!user || !(await isAllowed(env, user.id))) return null;
+  return user;
+}
 
-  if (!user || !(await isAllowed(env, user.id))) {
-    console.warn("stats: unauthorized", user?.id);
+async function handleStats(request, env) {
+  const user = await miniAppUser(request, env);
+  if (!user) {
+    console.warn("stats: unauthorized");
     return Response.json({ error: "unauthorized" }, { status: 403 });
   }
 
-  const days = await loadDays(env, user.id);
-  const today = localNow(Date.now(), await userTimezone(env, user.id)).date;
-  const stats = computeStats(days, today);
+  const { days, today, reminders, stats } = await userStats(env, user.id);
 
   const calendar = {};
   for (const [date, day] of Object.entries(days)) {
-    calendar[date] = { status: dayStatus(day), slots: day.slots, moments: day.moments };
+    calendar[date] = { status: dayStatus(day), checks: day.checks, moments: day.moments };
   }
 
-  return Response.json({ today, slots: SLOTS, calendar, ...stats });
+  return Response.json({ today, reminders, maxReminders: MAX_REMINDERS, calendar, ...stats });
 }
 
 // Telegram Mini App initData check:
@@ -465,9 +682,7 @@ async function handleWidget(request, env) {
     return Response.json({ error: "unauthorized" }, { status: 403 });
   }
 
-  const days = await loadDays(env, userId);
-  const today = localNow(Date.now(), await userTimezone(env, userId)).date;
-  const stats = computeStats(days, today);
+  const { days, today, stats } = await userStats(env, userId);
 
   // Last 7 days, oldest first, today last.
   const week = [];
@@ -595,17 +810,32 @@ function draw(d) {
 
 // ---------- Stats ----------
 
-// Returns { "2026-11-13": { slots: { morning: 0, lunch: 1 }, moments: [{ time, kind }] }, ... }
+// Everything needed to show a user's stats.
+async function userStats(env, userId) {
+  const [days, tz, reminders] = await Promise.all([
+    loadDays(env, userId),
+    userTimezone(env, userId),
+    loadReminders(env, userId),
+  ]);
+  const today = localNow(Date.now(), tz).date;
+  const stats = computeStats(days, today);
+  return { days, today, tz, reminders, stats };
+}
+
+// Returns { "2026-11-13": { checks: [{ slot, sugar, time, emoji, message }], moments: [{ time, kind }] }, ... }
 async function loadDays(env, userId) {
   const [checks, moments] = await env.DB.batch([
-    env.DB.prepare("SELECT date, slot, sugar FROM checks WHERE user_id = ?").bind(userId),
+    env.DB.prepare(
+      "SELECT date, slot, sugar, time, emoji, message FROM checks WHERE user_id = ? ORDER BY date, time"
+    ).bind(userId),
     env.DB.prepare("SELECT date, time, kind FROM moments WHERE user_id = ? ORDER BY date, time, id").bind(userId),
   ]);
 
   const days = {};
-  const dayFor = (date) => (days[date] ??= { slots: {}, moments: [] });
+  const dayFor = (date) => (days[date] ??= { checks: [], moments: [] });
   for (const row of checks.results) {
-    dayFor(row.date).slots[row.slot] = row.sugar;
+    const { date, ...check } = row;
+    dayFor(date).checks.push(check);
   }
   for (const row of moments.results) {
     dayFor(row.date).moments.push({ time: row.time, kind: row.kind });
@@ -617,14 +847,16 @@ async function loadDays(env, userId) {
 // "clean" if it has any record and no sugar, "none" if nothing was logged.
 function dayStatus(day) {
   if (!day) return "none";
-  const hasRecord = Object.keys(day.slots).length > 0 || day.moments.length > 0;
+  const hasRecord = day.checks.length > 0 || day.moments.length > 0;
   if (!hasRecord) return "none";
 
-  const sugarCheck = Object.values(day.slots).some((v) => v === 1);
+  const sugarCheck = day.checks.some((c) => c.sugar === 1);
   const sugarMoment = day.moments.some((m) => m.kind === "sugar");
   return sugarCheck || sugarMoment ? "sugar" : "clean";
 }
 
+// A day with nothing logged is a gray day: it does not count as clean and does not break the streak.
+// Only a sugar day breaks it. Same rule for everyone, so editing reminders never rewrites past streaks.
 function computeStats(days, today) {
   let clean = 0;
   let sugar = 0;
@@ -635,31 +867,29 @@ function computeStats(days, today) {
     refused += day.moments.filter((m) => m.kind === "refused").length;
   }
 
-  // Best streak: walk every day from the first record to today.
   const dates = Object.keys(days).sort();
+  const first = dates[0];
+  if (!first) return { streak: 0, best: 0, clean, sugar, refused };
+
+  // Best streak: walk every day from the first record to today.
   let best = 0;
   let run = 0;
-  if (dates.length > 0) {
-    for (let d = dates[0]; d <= today; d = shiftDay(d, 1)) {
-      if (dayStatus(days[d]) === "clean") {
-        run++;
-        best = Math.max(best, run);
-      } else {
-        run = 0;
-      }
+  for (let d = first; d <= today; d = shiftDay(d, 1)) {
+    const status = dayStatus(days[d]);
+    if (status === "clean") {
+      run++;
+      best = Math.max(best, run);
+    } else if (status === "sugar") {
+      run = 0;
     }
   }
 
-  // Current streak: today counts if clean. If today has no record yet,
-  // it does not break the streak; we start counting from yesterday.
+  // Current streak: walk back from today until a day breaks it.
   let streak = 0;
-  const todayStatus = dayStatus(days[today]);
-  if (todayStatus !== "sugar") {
-    let d = todayStatus === "clean" ? today : shiftDay(today, -1);
-    while (dayStatus(days[d]) === "clean") {
-      streak++;
-      d = shiftDay(d, -1);
-    }
+  for (let d = today; d >= first; d = shiftDay(d, -1)) {
+    const status = dayStatus(days[d]);
+    if (status === "clean") streak++;
+    else if (status === "sugar") break;
   }
 
   return { streak, best, clean, sugar, refused };

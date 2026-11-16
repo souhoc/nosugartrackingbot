@@ -12,15 +12,29 @@ CREATE TABLE IF NOT EXISTS users (
   user_id  INTEGER PRIMARY KEY,
   name     TEXT,
   timezone TEXT NOT NULL,
-  created  TEXT NOT NULL
+  created  TEXT NOT NULL,
+  onboarded INTEGER NOT NULL DEFAULT 0  -- 1 once they picked their reminders
 );
+
+-- Each user's own reminders. Times are the user's local HH:MM, on a 5-minute mark.
+CREATE TABLE IF NOT EXISTS reminders (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  time    TEXT NOT NULL,
+  emoji   TEXT NOT NULL,
+  message TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reminders_user ON reminders (user_id);
 
 CREATE TABLE IF NOT EXISTS checks (
   user_id     INTEGER NOT NULL,
   date        TEXT    NOT NULL,  -- user's local date, YYYY-MM-DD
-  slot        TEXT    NOT NULL,  -- morning | lunch | break | dinner
+  slot        TEXT    NOT NULL,  -- "r<reminder id>", or morning | lunch | break | dinner (old rows)
   sugar       INTEGER NOT NULL,  -- 1 = ate sugar, 0 = clean
   answered_at TEXT    NOT NULL,
+  time        TEXT,              -- copy of the reminder when answered, so history survives edits
+  emoji       TEXT,
+  message     TEXT,
   PRIMARY KEY (user_id, date, slot)
 );
 

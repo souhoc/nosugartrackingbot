@@ -2,7 +2,7 @@
 
 A private Telegram bot that helps you quit sugar.
 
-- Asks 4×/day (10:00, 12:30, 16:00, 19:00, in your timezone): *did you eat sugar since the last check?*
+- Asks *did you eat sugar?* at your own reminders: time, emoji and message are yours (up to 12, or none). New users pick defaults, custom or none.
 - Log moments any time with one tap: **💪 Refused sugar** or **🍬 Had sugar**.
 - A calendar Mini App inside Telegram shows your streak, best streak, clean/sugar days and refusals.
 - Multi-user with an allowlist: the owner decides who can use it.
@@ -15,18 +15,21 @@ One Worker (`src/index.js`) does everything:
 
 | Part | What it does |
 | --- | --- |
-| `scheduled` (cron every 30 min) | For each allowed user, sends a question when *their* local time matches a slot. DST-safe. |
+| `scheduled` (cron every 5 min) | Sends each reminder whose time matches its user's local time. Follows DST, but a reminder inside the skipped/repeated hour (often 02:00–03:00) is skipped or sent twice on those 2 days. |
 | `POST /webhook` | Telegram updates: answer buttons, moments, commands. Checked with a secret header. |
 | `GET /api/stats` | Calendar data for the Mini App. Checked with Telegram `initData` (HMAC). |
+| `PUT /api/reminders` | Save the user's reminders from the Mini App. Same `initData` check. |
+| `GET /api/widget` | Data for the iPhone widget. Checked with a per-user token. |
 | `/` | The Mini App page (`public/index.html`). |
 
-Data lives in D1: `users`, `allowlist`, `checks` (one row per user/day/slot), `moments`. See `schema.sql`.
+Data lives in D1: `users`, `allowlist`, `reminders`, `checks` (one row per user/day/reminder, with a copy of the reminder text), `moments`. See `schema.sql`.
 
 ## Commands
 
 | Command | Who | |
 | --- | --- | --- |
-| `/start` | everyone | Shows the moment buttons and calendar button |
+| `/start` | everyone | First time: pick reminders. Then: moment buttons and calendar button |
+| `/reminders` | everyone | List reminders, button to edit them in the Mini App |
 | `/refused`, `/sugar` | everyone | Log a moment (same as the buttons) |
 | `/undo` | everyone | Remove your last moment |
 | `/stats` | everyone | Streak and counts as text |
@@ -39,8 +42,9 @@ Data lives in D1: `users`, `allowlist`, `checks` (one row per user/day/slot), `m
 ## Rules
 
 - A day is **sugar** if any check said yes or a sugar moment was logged.
-- A day is **clean** if it has any record and no sugar. **Empty** if nothing logged.
-- Streak = consecutive clean days. Today with nothing logged yet does not break it; an empty past day does.
+- A day is **clean** if it has any record (answer or moment) and no sugar.
+- A day with nothing logged is **gray**: it doesn't count as clean and doesn't break the streak.
+- Streak = clean days in a row, skipping gray days. Only a sugar day breaks it.
 - Refusals count as wins and show as a dot on the calendar.
 
 ## Deploy your own
@@ -110,7 +114,15 @@ npm run dev    # cf dev, local D1, http://localhost:8787
 Telegram calls fail with the fake token (logged as `telegram error`), but the database and `/api/stats` work.
 Simulate updates by POSTing to `/webhook` with header `X-Telegram-Bot-Api-Secret-Token: testsecret`.
 
-## Upgrading from the single-user version
+## Upgrading
+
+From fixed 4 slots to custom reminders (run before deploying that version):
+
+```sh
+cf d1 query <database_id> --sql "$(grep -v '^\s*--' migrate-reminders.sql)"
+```
+
+From the single-user version:
 
 ```sh
 cf d1 query <database_id> --sql "$(grep -v '^\s*--' migrate-multi-user.sql | sed 's/__OWNER_ID__/<your id>/g')"
