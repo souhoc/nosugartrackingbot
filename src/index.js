@@ -22,6 +22,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const BTN_REFUSED = "💪 Refused sugar";
 const BTN_SUGAR = "🍬 Had sugar";
 
+import { OWNER_COMMANDS, applyMenus } from "./commands.js";
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -79,6 +81,20 @@ async function isAllowed(env, userId) {
   return row !== null;
 }
 
+// ---------- Command menus ("/" list in Telegram) ----------
+// Lists live in src/commands.js (shared with the deploy step, scripts/set-commands.js).
+
+// Messages that are owner commands, built from OWNER_COMMANDS so the menu and the gate can't drift.
+// e.g. /^\/(allow|remove|users|broadcast)\b/
+const OWNER_COMMAND_RE = new RegExp(`^\\/(${OWNER_COMMANDS.map((c) => c.command).join("|")})\\b`);
+
+// Same as the deploy step. Also run on the owner's /start, as a backup.
+async function setCommandMenus(env) {
+  const results = await applyMenus(env.BOT_TOKEN, env.OWNER_ID);
+  if (results.every((r) => r.ok)) console.log("command menus set");
+  else console.error("command menus failed", results);
+}
+
 // ---------- Owner commands: /allow <id>, /remove <id>, /users, /broadcast <text> ----------
 
 async function handleOwnerCommand(env, ownerId, text) {
@@ -104,6 +120,14 @@ async function handleOwnerCommand(env, ownerId, text) {
       chat_id: ownerId,
       text: lines.length > 0 ? `Allowed users:\n${lines.join("\n")}` : "Nobody else is allowed yet. Use /allow <user id>.",
     });
+    return;
+  }
+
+  // Only /allow and /remove are left. Anything else is a menu entry without a handler yet:
+  // refuse it, never fall through to /remove.
+  if (command !== "/allow" && command !== "/remove") {
+    console.warn("owner command without handler", command);
+    await tg(env, "sendMessage", { chat_id: ownerId, text: `${command} is not handled yet.` });
     return;
   }
 
@@ -466,7 +490,7 @@ async function handleMessage(message, env, url) {
   await upsertUser(env, from);
   const text = message.text || "";
 
-  const isOwnerCommand = /^\/(allow|remove|users|broadcast)\b/.test(text);
+  const isOwnerCommand = OWNER_COMMAND_RE.test(text);
   if (isOwnerCommand) {
     if (isOwner(env, from.id)) {
       await handleOwnerCommand(env, from.id, text);
@@ -528,9 +552,16 @@ async function handleMessage(message, env, url) {
   if (!(await isOnboarded(env, from.id))) {
     console.log("onboarding user", from.id);
     await sendSetupChoice(env, from.id, url.origin);
-    return;
+  } else {
+    await sendWelcome(env, from.id, url.origin);
   }
-  await sendWelcome(env, from.id, url.origin);
+
+  // Owner's /start also refreshes the "/" menus, so they follow the code after a deploy.
+  // After the reply, and never throws (applyMenus catches), so a failure can't cost the owner their /start.
+  const isStart = /^\/start(@\w+)?(\s|$)/.test(text);
+  if (isStart && isOwner(env, from.id)) {
+    await setCommandMenus(env);
+  }
 }
 
 // The moment keyboard, the reminder list and the calendar button.
@@ -543,9 +574,7 @@ async function sendWelcome(env, userId, origin) {
       `${reminderListText(reminders, tz)}\n\n` +
       "Any time, tap a button below to log a moment:\n" +
       `${BTN_REFUSED}: you said no to sugar\n` +
-      `${BTN_SUGAR}: you had some\n\n` +
-      "/reminders changes your reminders, /undo removes the last moment, /stats gives a summary, " +
-      "/timezone Area/City changes your timezone, /widget gives an iPhone widget (Scriptable).",
+      `${BTN_SUGAR}: you had some`,
     reply_markup: {
       keyboard: [[{ text: BTN_REFUSED }, { text: BTN_SUGAR }]],
       resize_keyboard: true,
