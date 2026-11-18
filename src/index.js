@@ -70,10 +70,12 @@ async function isAllowed(env, userId) {
 // ---------- Owner commands: /allow <id>, /remove <id>, /users, /broadcast <text> ----------
 
 async function handleOwnerCommand(env, ownerId, text) {
-  const [command, arg] = text.split(/\s+/);
+  const [rawCommand, arg] = text.split(/\s+/);
+  // "/allow@NoSugarBot 123" (from the command menu in some clients) is the same as "/allow 123".
+  const command = rawCommand.split("@")[0];
 
   if (command === "/broadcast") {
-    await broadcast(env, ownerId, text.slice(command.length).trim());
+    await broadcast(env, ownerId, text.slice(rawCommand.length).trim());
     return;
   }
 
@@ -130,14 +132,27 @@ async function broadcast(env, ownerId, message) {
     await tg(env, "sendMessage", { chat_id: ownerId, text: "Usage: /broadcast <text>" });
     return;
   }
+  // Telegram's limit for one message. Refuse before sending anything.
+  if (message.length > 4096) {
+    await tg(env, "sendMessage", {
+      chat_id: ownerId,
+      text: `Too long: ${message.length} characters, max 4096. Nothing was sent.`,
+    });
+    return;
+  }
 
   const { results } = await env.DB.prepare("SELECT user_id FROM allowlist ORDER BY added").all();
   const recipients = [ownerId, ...results.map((r) => r.user_id).filter((id) => !isOwner(env, id))];
 
   let sent = 0;
   for (const chatId of recipients) {
-    const res = await tg(env, "sendMessage", { chat_id: chatId, text: message });
-    if (res.ok) sent++;
+    // One failed send (network error, bad reply) must not stop the others.
+    try {
+      const res = await tg(env, "sendMessage", { chat_id: chatId, text: message });
+      if (res.ok) sent++;
+    } catch (err) {
+      console.error("broadcast send failed", chatId, err);
+    }
   }
   const failed = recipients.length - sent;
   console.log("broadcast", { recipients: recipients.length, sent, failed });
