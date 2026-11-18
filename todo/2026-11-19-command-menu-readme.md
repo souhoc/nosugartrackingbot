@@ -3,6 +3,7 @@ title: Command menu setup is written down in the README
 date: 2026-11-19
 state: in progress
 branch: docs/command-menu
+pr: https://github.com/souhoc/nosugartrackingbot/pull/6
 type: docs
 ---
 
