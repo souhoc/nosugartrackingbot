@@ -50,7 +50,10 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       # "/" command menus from src/commands.js, so they always match the deployed code.
+      # The Worker is already live here: a Telegram hiccup shows as a warning, not a failed
+      # release. Fix by hand with the owner's /start.
       - name: Set command menus
+        continue-on-error: true
         run: node scripts/set-commands.js
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}

@@ -22,7 +22,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const BTN_REFUSED = "💪 Refused sugar";
 const BTN_SUGAR = "🍬 Had sugar";
 
-import { OWNER_COMMANDS, menuRequests } from "./commands.js";
+import { OWNER_COMMANDS, applyMenus } from "./commands.js";
 
 export default {
   async fetch(request, env) {
@@ -88,14 +88,11 @@ async function isAllowed(env, userId) {
 // e.g. /^\/(allow|remove|users|broadcast)\b/
 const OWNER_COMMAND_RE = new RegExp(`^\\/(${OWNER_COMMANDS.map((c) => c.command).join("|")})\\b`);
 
-// Same calls as the deploy step. Also run on the owner's /start, as a backup.
+// Same as the deploy step. Also run on the owner's /start, as a backup.
 async function setCommandMenus(env) {
-  const results = [];
-  for (const body of menuRequests(env.OWNER_ID)) {
-    const res = await tg(env, "setMyCommands", body);
-    results.push(res.ok || res.description);
-  }
-  console.log("command menus set", results);
+  const results = await applyMenus(env.BOT_TOKEN, env.OWNER_ID);
+  if (results.every((r) => r.ok)) console.log("command menus set");
+  else console.error("command menus failed", results);
 }
 
 // ---------- Owner commands: /allow <id>, /remove <id>, /users, /broadcast <text> ----------
@@ -123,6 +120,14 @@ async function handleOwnerCommand(env, ownerId, text) {
       chat_id: ownerId,
       text: lines.length > 0 ? `Allowed users:\n${lines.join("\n")}` : "Nobody else is allowed yet. Use /allow <user id>.",
     });
+    return;
+  }
+
+  // Only /allow and /remove are left. Anything else is a menu entry without a handler yet:
+  // refuse it, never fall through to /remove.
+  if (command !== "/allow" && command !== "/remove") {
+    console.warn("owner command without handler", command);
+    await tg(env, "sendMessage", { chat_id: ownerId, text: `${command} is not handled yet.` });
     return;
   }
 
@@ -552,14 +557,10 @@ async function handleMessage(message, env, url) {
   }
 
   // Owner's /start also refreshes the "/" menus, so they follow the code after a deploy.
-  // After the reply, and never fatal: a failed menu update must not cost the owner their /start.
+  // After the reply, and never throws (applyMenus catches), so a failure can't cost the owner their /start.
   const isStart = /^\/start(@\w+)?(\s|$)/.test(text);
   if (isStart && isOwner(env, from.id)) {
-    try {
-      await setCommandMenus(env);
-    } catch (err) {
-      console.error("command menus failed", err);
-    }
+    await setCommandMenus(env);
   }
 }
 

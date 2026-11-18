@@ -22,10 +22,33 @@ export const OWNER_COMMANDS = [
   { command: "broadcast", description: "Owner: /broadcast <text> to all users" },
 ];
 
-// The two setMyCommands bodies: default scope, then the owner's chat.
-export function menuRequests(ownerId) {
-  return [
-    { commands: USER_COMMANDS },
-    { scope: { type: "chat", chat_id: Number(ownerId) }, commands: [...USER_COMMANDS, ...OWNER_COMMANDS] },
+// Sets both menus: default scope (everyone), then the owner's chat.
+// Never throws: returns [{ scope, ok, error }] so callers decide how to report.
+export async function applyMenus(botToken, ownerId) {
+  const requests = [
+    { scope: "default", body: { commands: USER_COMMANDS } },
+    {
+      scope: "owner",
+      body: {
+        scope: { type: "chat", chat_id: Number(ownerId) },
+        commands: [...USER_COMMANDS, ...OWNER_COMMANDS],
+      },
+    },
   ];
+  const results = [];
+  for (const { scope, body } of requests) {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const data = await res.json();
+      results.push({ scope, ok: data.ok === true, error: data.ok ? undefined : data.description });
+    } catch (err) {
+      results.push({ scope, ok: false, error: String(err) });
+    }
+  }
+  return results;
 }
