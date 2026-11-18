@@ -102,13 +102,20 @@ const OWNER_COMMANDS = [
   { command: "broadcast", description: "Owner: /broadcast <text> to all users" },
 ];
 
+// Messages that are owner commands, built from OWNER_COMMANDS so the menu and the gate can't drift.
+// e.g. /^\/(allow|remove|users|broadcast)\b/
+const OWNER_COMMAND_RE = new RegExp(`^\\/(${OWNER_COMMANDS.map((c) => c.command).join("|")})\\b`);
+
 async function setCommandMenus(env) {
   const all = await tg(env, "setMyCommands", { commands: USER_COMMANDS });
   const owner = await tg(env, "setMyCommands", {
     scope: { type: "chat", chat_id: Number(env.OWNER_ID) },
     commands: [...USER_COMMANDS, ...OWNER_COMMANDS],
   });
-  console.log("command menus set", { all: all.ok, owner: owner.ok });
+  console.log("command menus set", {
+    all: all.ok || all.description,
+    owner: owner.ok || owner.description,
+  });
 }
 
 // ---------- Owner commands: /allow <id>, /remove <id>, /users, /broadcast <text> ----------
@@ -498,7 +505,7 @@ async function handleMessage(message, env, url) {
   await upsertUser(env, from);
   const text = message.text || "";
 
-  const isOwnerCommand = /^\/(allow|remove|users|broadcast)\b/.test(text);
+  const isOwnerCommand = OWNER_COMMAND_RE.test(text);
   if (isOwnerCommand) {
     if (isOwner(env, from.id)) {
       await handleOwnerCommand(env, from.id, text);
@@ -556,18 +563,24 @@ async function handleMessage(message, env, url) {
     return;
   }
 
-  // Owner's /start also refreshes the "/" menus, so they follow the code after a deploy.
-  if (text.startsWith("/start") && isOwner(env, from.id)) {
-    await setCommandMenus(env);
-  }
-
   // /start or anything else: new users pick their reminders first, others get the welcome.
   if (!(await isOnboarded(env, from.id))) {
     console.log("onboarding user", from.id);
     await sendSetupChoice(env, from.id, url.origin);
-    return;
+  } else {
+    await sendWelcome(env, from.id, url.origin);
   }
-  await sendWelcome(env, from.id, url.origin);
+
+  // Owner's /start also refreshes the "/" menus, so they follow the code after a deploy.
+  // After the reply, and never fatal: a failed menu update must not cost the owner their /start.
+  const isStart = /^\/start(@\w+)?(\s|$)/.test(text);
+  if (isStart && isOwner(env, from.id)) {
+    try {
+      await setCommandMenus(env);
+    } catch (err) {
+      console.error("command menus failed", err);
+    }
+  }
 }
 
 // The moment keyboard, the reminder list and the calendar button.
