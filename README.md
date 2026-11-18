@@ -38,6 +38,7 @@ Data lives in D1: `users`, `allowlist`, `reminders`, `checks` (one row per user/
 | `/allow <id>` | owner | Give someone access |
 | `/remove <id>` | owner | Remove access, stop reminders. Their data is kept |
 | `/users` | owner | List allowed users |
+| `/broadcast <text>` | owner | Send a message to every allowed user and yourself (line breaks kept) |
 
 ## Rules
 

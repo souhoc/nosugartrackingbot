@@ -20,4 +20,4 @@ On the widget, `clean today` and `Best N` need a vertical gap. They look stuck t
 ## Log
 - 2026-11-18 created (backlog)
 - 2026-11-18 in progress — branch fix/widget-status-best-gap
-- 2026-11-18 completed — merged PR #3, released v1.2.1
+- 2026-11-18 completed — merged PR #3, released v1.2.2
