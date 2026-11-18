@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS access_requests (
   name      TEXT,
   username  TEXT,
   requested TEXT NOT NULL,
-  ignored   TEXT              -- when the owner tapped Ignore, NULL while pending
+  -- When the owner tapped Ignore, NULL while pending.
+  ignored   TEXT
 );
 
 -- One row per person who sent /start while allowed.

@@ -229,21 +229,33 @@ async function handleAccessCallback(query, env) {
     await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
     return;
   }
-  const request = await env.DB.prepare("SELECT name, username FROM access_requests WHERE user_id = ?")
-    .bind(userId)
-    .first();
-  const who = requesterLabel(request, userId);
+  // Only a still-pending request can be acted on. An old message whose request was already
+  // handled (button, /allow) does nothing, so it can't undo a later /remove.
+  let request;
+  if (action === "allow") {
+    request = await env.DB.prepare(
+      "DELETE FROM access_requests WHERE user_id = ? AND ignored IS NULL RETURNING name, username"
+    )
+      .bind(userId)
+      .first();
+  } else {
+    request = await env.DB.prepare(
+      "UPDATE access_requests SET ignored = ? WHERE user_id = ? AND ignored IS NULL RETURNING name, username"
+    )
+      .bind(new Date().toISOString(), userId)
+      .first();
+  }
 
   let text;
-  if (action === "allow") {
+  if (!request) {
+    console.log("stale access button", query.data);
+    text = `This request (${userId}) was already handled.`;
+  } else if (action === "allow") {
     await grantAccess(env, userId);
-    text = `✅ ${who} can now use the bot.`;
+    text = `✅ ${requesterLabel(request, userId)} can now use the bot.`;
   } else {
-    await env.DB.prepare("UPDATE access_requests SET ignored = ? WHERE user_id = ?")
-      .bind(new Date().toISOString(), userId)
-      .run();
     console.log("owner ignored access request", userId);
-    text = `❌ Ignored ${who}. They can't ask again.`;
+    text = `❌ Ignored ${requesterLabel(request, userId)}. They can't ask again.`;
   }
   await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
   // Replace the request so its buttons can't be tapped twice.
@@ -257,7 +269,7 @@ async function askForAccess(query, env) {
     return;
   }
 
-  const name = [from.first_name, from.last_name].filter(Boolean).join(" ") || null;
+  const name = from.first_name || null; // same as users.name
   const { meta } = await env.DB.prepare(
     "INSERT OR IGNORE INTO access_requests (user_id, name, username, requested) VALUES (?, ?, ?, ?)"
   )
@@ -270,7 +282,7 @@ async function askForAccess(query, env) {
   }
 
   console.log("access request", from.id);
-  await tg(env, "sendMessage", {
+  const sent = await tg(env, "sendMessage", {
     chat_id: Number(env.OWNER_ID),
     text: `🙋 ${requesterLabel({ name, username: from.username }, from.id)} asks for access.`,
     reply_markup: {
@@ -282,6 +294,16 @@ async function askForAccess(query, env) {
       ],
     },
   });
+  if (!sent.ok) {
+    // The owner never got it: forget the request so they can try again later.
+    await env.DB.prepare("DELETE FROM access_requests WHERE user_id = ?").bind(from.id).run();
+    console.error("access request not delivered to owner", from.id);
+    await tg(env, "answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "Couldn't reach the owner. Try again later.",
+    });
+    return;
+  }
   await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
   await tg(env, "editMessageText", {
     chat_id: query.message.chat.id,
@@ -453,7 +475,7 @@ async function handleWebhook(request, env, url) {
 
 async function handleCallback(query, env, url) {
   // Access requests come from people who are not allowed yet: handled before the check.
-  if (query.data.startsWith("access|")) {
+  if ((query.data || "").startsWith("access|")) {
     await handleAccessCallback(query, env);
     return;
   }
