@@ -274,7 +274,7 @@
       const rows = draft.map((r, i) => `
         <div class="rem">
           <input class="emoji" data-i="${i}" data-k="emoji" value="${esc(r.emoji)}" maxlength="16" aria-label="Emoji">
-          <input type="time" step="300" data-i="${i}" data-k="time" value="${esc(r.time)}" aria-label="Time">
+          <input type="time" step="300" data-time="${i}" value="${esc(r.time)}" aria-label="Time">
           <button class="btn del" data-del="${i}" aria-label="Delete reminder">✕</button>
           <textarea data-i="${i}" data-k="message" rows="2" maxlength="200"
             placeholder="Message I send you" aria-label="Message">${esc(r.message)}</textarea>
@@ -285,7 +285,7 @@
           <button class="btn" id="back" aria-label="Back to calendar">‹</button>
           <h2>Reminders</h2>
         </div>
-        <p class="note">At each reminder I ask if you ate sugar. Times are rounded to 5 minutes.
+        <p class="note">At each reminder I ask if you ate sugar. Times snap to the nearest 5 minutes.
           Days with nothing logged don't count and don't break your streak.</p>
         ${rows || '<p class="muted">No reminders.</p>'}
         <button class="btn" id="add" ${draft.length >= data.maxReminders ? "disabled" : ""}>+ Add reminder</button>
@@ -295,6 +295,16 @@
 
       app.querySelectorAll("[data-k]").forEach((el) => {
         el.oninput = () => { draft[el.dataset.i][el.dataset.k] = el.value; };
+      });
+      app.querySelectorAll("[data-time]").forEach((el) => {
+        // The picker allows any minute. The draft follows every edit; when the field is
+        // left (iOS picker closed, desktop focus moves), snap to 5 minutes and show it.
+        // Not on "change": desktop Chrome fires it on each typed digit.
+        el.oninput = () => { draft[el.dataset.time].time = el.value; };
+        el.onblur = () => {
+          el.value = toFiveMinutes(el.value);
+          draft[el.dataset.time].time = el.value;
+        };
       });
       app.querySelectorAll("[data-del]").forEach((el) => {
         el.onclick = () => { draft.splice(Number(el.dataset.del), 1); saveMsg = ""; render(); };
@@ -308,22 +318,25 @@
       document.getElementById("save").onclick = saveReminders;
     }
 
-    // "09:07" -> "09:05". Keeps HH:MM on a 5-minute mark, like the cron.
-    function roundTime(t) {
-      const [h, m] = (t || "").split(":").map(Number);
-      if (Number.isNaN(h) || Number.isNaN(m)) return t;
-      return pad(h) + ":" + pad(m - (m % 5));
+    // Nearest 5 minutes: "09:07" -> "09:05", "09:08" -> "09:10". Never past 23:55, so a
+    // late reminder stays on the same day. Seconds are ignored. Anything else (e.g. empty)
+    // is returned as is, so the server rejects it with a visible error.
+    // The cron runs every 5 minutes, so times must be on a 5-minute mark.
+    function toFiveMinutes(time) {
+      const match = /^(\d{1,2}):(\d{1,2})(:\d{1,2})?$/.exec(time || "");
+      if (!match) return time;
+      const total = Math.min(Math.round((Number(match[1]) * 60 + Number(match[2])) / 5) * 5, 23 * 60 + 55);
+      return pad(Math.floor(total / 60)) + ":" + pad(total % 60);
     }
 
     async function saveReminders() {
-      const reminders = draft.map((r) => ({ ...r, time: roundTime(r.time) }));
       document.getElementById("save").disabled = true;
       let res, body;
       try {
         res = await fetch("/api/reminders", {
           method: "PUT",
           headers: { Authorization: "tma " + tg.initData, "content-type": "application/json" },
-          body: JSON.stringify({ reminders }),
+          body: JSON.stringify({ reminders: draft.map((r) => ({ ...r, time: toFiveMinutes(r.time) })) }),
         });
         body = await res.json().catch(() => ({}));
       } catch (err) {
