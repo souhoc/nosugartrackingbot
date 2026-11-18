@@ -1,7 +1,7 @@
 ---
 title: Owner can send a message to all users with /broadcast
 date: 2026-11-18
-state: in progress
+state: completed
 branch: feat/owner-broadcast
 pr: https://github.com/souhoc/nosugartrackingbot/pull/4
 type: feature
@@ -21,3 +21,4 @@ No way to tell users about a release (e.g. "send /widget again to get the new wi
 ## Log
 - 2026-11-18 created (backlog)
 - 2026-11-18 in progress — branch feat/owner-broadcast
+- 2026-11-18 completed — merged PR #4, released v1.3.0
