@@ -3,6 +3,7 @@ title: Gap between "Clean today" and "Best N" on the widget
 date: 2026-11-18
 state: in progress
 branch: fix/widget-status-best-gap
+pr: https://github.com/souhoc/nosugartrackingbot/pull/3
 type: fix
 ---
 
