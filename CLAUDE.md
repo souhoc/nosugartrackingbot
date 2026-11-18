@@ -30,7 +30,7 @@ Telegram bot to track sugar. One Cloudflare Worker + D1 + a static Mini App page
 - Access: owner = `OWNER_ID` secret, always allowed. Others via `allowlist` table, managed with `/allow`, `/remove`, `/users` (owner only). Every query must filter by `user_id`.
 - Webhook always returns 200 (else Telegram retries forever); errors are logged.
 - Mini App auth: `Authorization: tma <initData>`, verified with HMAC per Telegram docs, max age 24h.
-- Owner-only commands are shown only in the owner's command menu (`setMyCommands` with chat scope).
+- Owner-only commands are shown only in the owner's command menu (`setMyCommands` with chat scope). Menus live in code (`USER_COMMANDS`, `OWNER_COMMANDS`) and are applied when the owner sends /start: add a new command there too.
 
 ## Workflow for every feature or patch
 

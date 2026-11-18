@@ -102,31 +102,9 @@ You need: a Cloudflare account, the [`cf` CLI](https://developers.cloudflare.com
    # Calendar button next to the chat input
    curl "https://api.telegram.org/bot$BOT_TOKEN/setChatMenuButton" -H 'content-type: application/json' \
      -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Calendar\",\"web_app\":{\"url\":\"$URL/\"}}}"
-
-   # Command menu ("/" list). Everyone gets USER_CMDS; the owner gets USER_CMDS + OWNER_CMDS.
-   # A chat scope replaces the default list, so the owner list repeats USER_CMDS.
-   # Re-run after any change to commands or descriptions (keep in sync with the Commands table).
-   # Each call must print {"ok":true,"result":true}.
-   USER_CMDS='{"command":"refused","description":"I refused sugar"},
-     {"command":"sugar","description":"I had sugar"},
-     {"command":"undo","description":"Remove the last moment"},
-     {"command":"reminders","description":"Your reminders: list and edit"},
-     {"command":"stats","description":"Streak and counts"},
-     {"command":"timezone","description":"Show or change your timezone"},
-     {"command":"widget","description":"iPhone home screen widget (Scriptable)"},
-     {"command":"start","description":"Show buttons and calendar"}'
-   OWNER_CMDS='{"command":"allow","description":"Owner: /allow <user id>"},
-     {"command":"remove","description":"Owner: /remove <user id>"},
-     {"command":"users","description":"Owner: list allowed users"},
-     {"command":"broadcast","description":"Owner: /broadcast <text> to all users"}'
-
-   curl "https://api.telegram.org/bot$BOT_TOKEN/setMyCommands" -H 'content-type: application/json' \
-     -d "{\"commands\":[$USER_CMDS]}"
-   curl "https://api.telegram.org/bot$BOT_TOKEN/setMyCommands" -H 'content-type: application/json' \
-     -d "{\"scope\":{\"type\":\"chat\",\"chat_id\":$OWNER_ID},\"commands\":[$USER_CMDS,$OWNER_CMDS]}"
    ```
 
-7. Send `/start` to your bot.
+7. Send `/start` to your bot. As the owner, `/start` also sets the command menus ("/" list): user commands for everyone, plus owner commands for you. Send it again after a deploy that changes commands.
 
 [@BotFather]: https://t.me/BotFather
 [@userinfobot]: https://t.me/userinfobot

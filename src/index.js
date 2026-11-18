@@ -79,6 +79,38 @@ async function isAllowed(env, userId) {
   return row !== null;
 }
 
+// ---------- Command menus ("/" list in Telegram) ----------
+// Everyone sees USER_COMMANDS. The owner sees USER_COMMANDS + OWNER_COMMANDS: a chat-scoped
+// list replaces the default one, so it has to repeat the user commands.
+// Add a command here when you add its handler. Applied when the owner sends /start.
+
+const USER_COMMANDS = [
+  { command: "refused", description: "I refused sugar" },
+  { command: "sugar", description: "I had sugar" },
+  { command: "undo", description: "Remove the last moment" },
+  { command: "reminders", description: "Your reminders: list and edit" },
+  { command: "stats", description: "Streak and counts" },
+  { command: "timezone", description: "Show or change your timezone" },
+  { command: "widget", description: "iPhone home screen widget (Scriptable)" },
+  { command: "start", description: "Show buttons and calendar" },
+];
+
+const OWNER_COMMANDS = [
+  { command: "allow", description: "Owner: /allow <user id>" },
+  { command: "remove", description: "Owner: /remove <user id>" },
+  { command: "users", description: "Owner: list allowed users" },
+  { command: "broadcast", description: "Owner: /broadcast <text> to all users" },
+];
+
+async function setCommandMenus(env) {
+  const all = await tg(env, "setMyCommands", { commands: USER_COMMANDS });
+  const owner = await tg(env, "setMyCommands", {
+    scope: { type: "chat", chat_id: Number(env.OWNER_ID) },
+    commands: [...USER_COMMANDS, ...OWNER_COMMANDS],
+  });
+  console.log("command menus set", { all: all.ok, owner: owner.ok });
+}
+
 // ---------- Owner commands: /allow <id>, /remove <id>, /users, /broadcast <text> ----------
 
 async function handleOwnerCommand(env, ownerId, text) {
@@ -522,6 +554,11 @@ async function handleMessage(message, env, url) {
         `💪 Times refused: ${stats.refused}\n\n${targetLine}\n🍀 Cheat days: ${cheatDays}`,
     });
     return;
+  }
+
+  // Owner's /start also refreshes the "/" menus, so they follow the code after a deploy.
+  if (text.startsWith("/start") && isOwner(env, from.id)) {
+    await setCommandMenus(env);
   }
 
   // /start or anything else: new users pick their reminders first, others get the welcome.
