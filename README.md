@@ -25,7 +25,7 @@ One Worker (`src/index.js`) does everything:
 | `GET /api/widget` | Data for the iPhone widget. Checked with a per-user token. |
 | `/` | The Mini App page (`public/index.html`). |
 
-Data lives in D1: `users`, `allowlist`, `reminders`, `checks` (one row per user/day/reminder, with a copy of the reminder text), `moments`, `targets`, `cheats`. See `schema.sql`.
+Data lives in D1: `users`, `allowlist`, `reminders`, `checks` (one row per user/day/reminder, with a copy of the reminder text), `moments`, `targets`, `cheats`, `access_requests`. See `schema.sql`.
 
 ## Commands
 
@@ -111,9 +111,11 @@ You need: a Cloudflare account, the [`cf` CLI](https://developers.cloudflare.com
 
 ## Sharing with someone
 
-1. They open the bot and send anything. It replies with their user id.
-2. They send you the id. You send `/allow <id>` to the bot.
-3. They get "You now have access" and send `/start`.
+1. They open the bot and send anything. It replies that the bot is private, with their user id and a **🙋 Ask for access** button.
+2. They tap it. You get "Name (@username, id) asks for access" with **✅ Allow** / **❌ Ignore**. (Or they send you the id and you send `/allow <id>`.)
+3. Allowed: they get "You now have access" and send `/start`. Ignored: they are not told.
+
+One request per person: tapping again only says "Already asked". After an ignore they can't ask again (delete their row in `access_requests` to let them). After `/remove` they can ask again.
 
 ## Local dev
 
@@ -135,6 +137,12 @@ Adding targets and cheat days (new tables only, run before deploying that versio
 
 ```sh
 cf d1 query <database_id> --sql "$(grep -v '^\s*--' migrate-targets.sql)"
+```
+
+Adding access requests (new table only, run before deploying that version):
+
+```sh
+cf d1 query <database_id> --sql "$(grep -v '^\s*--' migrate-access-requests.sql)"
 ```
 
 From fixed 4 slots to custom reminders (run before deploying that version):
