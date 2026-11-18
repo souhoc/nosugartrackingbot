@@ -1,7 +1,7 @@
 ---
 title: A stranger can ask the owner for access from the bot
 date: 2026-11-19
-state: in progress
+state: completed
 branch: feat/ask-for-access
 pr: https://github.com/souhoc/nosugartrackingbot/pull/7
 type: feature
@@ -24,3 +24,4 @@ Today a non-allowed user only gets "This bot is private. Your user id is X. Send
 ## Log
 - 2026-11-19 created (backlog)
 - 2026-11-19 in progress — branch feat/ask-for-access
+- 2026-11-19 completed — merged PR #7, table created on prod
