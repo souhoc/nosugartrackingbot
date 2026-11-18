@@ -8,7 +8,7 @@ type: fix
 ---
 
 ## Why
-On the widget, `clean today` and `Best N` need a gap (user said "horizontal gap"; meant space between the two stacked lines). They look stuck together.
+On the widget, `clean today` and `Best N` need a vertical gap. They look stuck together.
 
 ## What
 - Visible space between the today status line and the `🏆 Best N` line. They stay on two lines, one under the other.
