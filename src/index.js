@@ -142,13 +142,8 @@ async function handleOwnerCommand(env, ownerId, text) {
   }
 
   if (command === "/allow") {
-    await env.DB.prepare("INSERT OR IGNORE INTO allowlist (user_id, added) VALUES (?, ?)")
-      .bind(targetId, new Date().toISOString())
-      .run();
-    console.log("owner allowed user", targetId);
+    await grantAccess(env, targetId);
     await tg(env, "sendMessage", { chat_id: ownerId, text: `✅ ${targetId} can now use the bot.` });
-    // Works only if they already opened the bot (e.g. got the "private" reply). Failure is fine.
-    await tg(env, "sendMessage", { chat_id: targetId, text: "🎉 You now have access. Send /start to begin." });
     return;
   }
 
@@ -197,6 +192,130 @@ async function broadcast(env, ownerId, message) {
     chat_id: ownerId,
     text: `📣 Sent to ${sent} of ${recipients.length} (you included)` + (failed > 0 ? `. ${failed} failed, see logs.` : "."),
   });
+}
+
+// Adds someone to the allowlist and tells them. Used by /allow and the "✅ Allow" button.
+// Their access request (if any) is done, so it's deleted: after a later /remove they may ask again.
+async function grantAccess(env, userId) {
+  await env.DB.batch([
+    env.DB.prepare("INSERT OR IGNORE INTO allowlist (user_id, added) VALUES (?, ?)").bind(userId, new Date().toISOString()),
+    env.DB.prepare("DELETE FROM access_requests WHERE user_id = ?").bind(userId),
+  ]);
+  console.log("owner allowed user", userId);
+  // Works only if they already opened the bot (e.g. got the "private" reply). Failure is fine.
+  await tg(env, "sendMessage", { chat_id: userId, text: "🎉 You now have access. Send /start to begin." });
+}
+
+// ---------- Access requests ----------
+// A stranger taps "🙋 Ask for access" on the "private" reply. The owner gets the request with
+// "✅ Allow" / "❌ Ignore". One request per person: while their row exists (pending or ignored),
+// tapping again only says "Already asked". The row is deleted when they're allowed.
+// Callback data: "access|ask", "access|allow|<user id>", "access|ignore|<user id>".
+
+async function handleAccessCallback(query, env) {
+  const [, action, idText] = query.data.split("|");
+  if (action === "ask") {
+    await askForAccess(query, env);
+    return;
+  }
+
+  if (!isOwner(env, query.from.id)) {
+    await tg(env, "answerCallbackQuery", { callback_query_id: query.id, text: "Only the owner can do that." });
+    return;
+  }
+  const userId = Number(idText);
+  if ((action !== "allow" && action !== "ignore") || !Number.isInteger(userId) || userId <= 0) {
+    console.warn("bad access callback", query.data);
+    await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
+    return;
+  }
+  // Only a still-pending request can be acted on. An old message whose request was already
+  // handled (button, /allow) does nothing, so it can't undo a later /remove.
+  let request;
+  if (action === "allow") {
+    request = await env.DB.prepare(
+      "DELETE FROM access_requests WHERE user_id = ? AND ignored IS NULL RETURNING name, username"
+    )
+      .bind(userId)
+      .first();
+  } else {
+    request = await env.DB.prepare(
+      "UPDATE access_requests SET ignored = ? WHERE user_id = ? AND ignored IS NULL RETURNING name, username"
+    )
+      .bind(new Date().toISOString(), userId)
+      .first();
+  }
+
+  let text;
+  if (!request) {
+    console.log("stale access button", query.data);
+    text = `This request (${userId}) was already handled.`;
+  } else if (action === "allow") {
+    await grantAccess(env, userId);
+    text = `✅ ${requesterLabel(request, userId)} can now use the bot.`;
+  } else {
+    console.log("owner ignored access request", userId);
+    text = `❌ Ignored ${requesterLabel(request, userId)}. They can't ask again.`;
+  }
+  await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
+  // Replace the request so its buttons can't be tapped twice.
+  await tg(env, "editMessageText", { chat_id: query.message.chat.id, message_id: query.message.message_id, text });
+}
+
+async function askForAccess(query, env) {
+  const from = query.from;
+  if (await isAllowed(env, from.id)) {
+    await tg(env, "answerCallbackQuery", { callback_query_id: query.id, text: "You already have access. Send /start." });
+    return;
+  }
+
+  const name = from.first_name || null; // same as users.name
+  const { meta } = await env.DB.prepare(
+    "INSERT OR IGNORE INTO access_requests (user_id, name, username, requested) VALUES (?, ?, ?, ?)"
+  )
+    .bind(from.id, name, from.username || null, new Date().toISOString())
+    .run();
+  if (meta.changes === 0) {
+    console.log("access request again", from.id);
+    await tg(env, "answerCallbackQuery", { callback_query_id: query.id, text: "Already asked." });
+    return;
+  }
+
+  console.log("access request", from.id);
+  const sent = await tg(env, "sendMessage", {
+    chat_id: Number(env.OWNER_ID),
+    text: `🙋 ${requesterLabel({ name, username: from.username }, from.id)} asks for access.`,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✅ Allow", callback_data: `access|allow|${from.id}` },
+          { text: "❌ Ignore", callback_data: `access|ignore|${from.id}` },
+        ],
+      ],
+    },
+  });
+  if (!sent.ok) {
+    // The owner never got it: forget the request so they can try again later.
+    await env.DB.prepare("DELETE FROM access_requests WHERE user_id = ?").bind(from.id).run();
+    console.error("access request not delivered to owner", from.id);
+    await tg(env, "answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "Couldn't reach the owner. Try again later.",
+    });
+    return;
+  }
+  await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
+  await tg(env, "editMessageText", {
+    chat_id: query.message.chat.id,
+    message_id: query.message.message_id,
+    text: "🙋 Request sent. You'll get a message if the owner says yes.",
+  });
+}
+
+// "Ana (@ana, 123)", "Ana (123)" or "123".
+function requesterLabel(request, userId) {
+  const parts = [request?.username ? `@${request.username}` : null, String(userId)].filter(Boolean);
+  return request?.name ? `${request.name} (${parts.join(", ")})` : parts.join(", ");
 }
 
 // Creates the user on first contact, keeps their name fresh after that.
@@ -355,6 +474,12 @@ async function handleWebhook(request, env, url) {
 }
 
 async function handleCallback(query, env, url) {
+  // Access requests come from people who are not allowed yet: handled before the check.
+  if ((query.data || "").startsWith("access|")) {
+    await handleAccessCallback(query, env);
+    return;
+  }
+
   const userId = query.from.id;
   if (!(await isAllowed(env, userId))) {
     console.warn("callback from non-allowed user", userId);
@@ -480,10 +605,25 @@ async function handleMessage(message, env, url) {
 
   if (!(await isAllowed(env, from.id))) {
     console.log("message from non-allowed user", from.id);
-    await tg(env, "sendMessage", {
-      chat_id: chatId,
-      text: `This bot is private. Your user id is ${from.id}. Send it to the owner to get access.`,
-    });
+    // The button only for people who never asked. Pending: say so. Ignored: plain "private",
+    // without saying they were refused.
+    const request = await env.DB.prepare("SELECT ignored FROM access_requests WHERE user_id = ?")
+      .bind(from.id)
+      .first();
+    if (!request) {
+      await tg(env, "sendMessage", {
+        chat_id: chatId,
+        text: `This bot is private. Your user id is ${from.id}. Tap below to ask the owner for access.`,
+        reply_markup: { inline_keyboard: [[{ text: "🙋 Ask for access", callback_data: "access|ask" }]] },
+      });
+    } else if (!request.ignored) {
+      await tg(env, "sendMessage", {
+        chat_id: chatId,
+        text: "This bot is private. 🙋 Your request is waiting for the owner.",
+      });
+    } else {
+      await tg(env, "sendMessage", { chat_id: chatId, text: `This bot is private. Your user id is ${from.id}.` });
+    }
     return;
   }
 

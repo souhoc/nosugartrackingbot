@@ -6,6 +6,17 @@ CREATE TABLE IF NOT EXISTS allowlist (
   added   TEXT NOT NULL
 );
 
+-- People who tapped "Ask for access". One row per person: while it exists they can't ask again.
+-- Deleted when the owner allows them (button or /allow). Kept when ignored.
+CREATE TABLE IF NOT EXISTS access_requests (
+  user_id   INTEGER PRIMARY KEY,
+  name      TEXT,
+  username  TEXT,
+  requested TEXT NOT NULL,
+  -- When the owner tapped Ignore, NULL while pending.
+  ignored   TEXT
+);
+
 -- One row per person who sent /start while allowed.
 -- In a private chat, chat id == user id, so we message user_id directly.
 CREATE TABLE IF NOT EXISTS users (
