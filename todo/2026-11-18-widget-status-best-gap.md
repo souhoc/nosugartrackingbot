@@ -1,7 +1,7 @@
 ---
 title: Gap between "Clean today" and "Best N" on the widget
 date: 2026-11-18
-state: in progress
+state: completed
 branch: fix/widget-status-best-gap
 pr: https://github.com/souhoc/nosugartrackingbot/pull/3
 type: fix
@@ -20,3 +20,4 @@ On the widget, `clean today` and `Best N` need a vertical gap. They look stuck t
 ## Log
 - 2026-11-18 created (backlog)
 - 2026-11-18 in progress — branch fix/widget-status-best-gap
+- 2026-11-18 completed — merged PR #3, released v1.2.1
