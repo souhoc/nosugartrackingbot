@@ -67,10 +67,15 @@ async function isAllowed(env, userId) {
   return row !== null;
 }
 
-// ---------- Owner commands: /allow <id>, /remove <id>, /users ----------
+// ---------- Owner commands: /allow <id>, /remove <id>, /users, /broadcast <text> ----------
 
 async function handleOwnerCommand(env, ownerId, text) {
   const [command, arg] = text.split(/\s+/);
+
+  if (command === "/broadcast") {
+    await broadcast(env, ownerId, text.slice(command.length).trim());
+    return;
+  }
 
   if (command === "/users") {
     const { results } = await env.DB.prepare(
@@ -115,6 +120,31 @@ async function handleOwnerCommand(env, ownerId, text) {
   await tg(env, "sendMessage", {
     chat_id: ownerId,
     text: meta.changes > 0 ? `🚫 ${targetId} removed. Their data is kept.` : `${targetId} was not in the list.`,
+  });
+}
+
+// /broadcast <text>: sends the text to the owner and every allowed user, then a count to the owner.
+// Line breaks in the text are kept. A user who never opened the bot or blocked it counts as failed.
+async function broadcast(env, ownerId, message) {
+  if (!message) {
+    await tg(env, "sendMessage", { chat_id: ownerId, text: "Usage: /broadcast <text>" });
+    return;
+  }
+
+  const { results } = await env.DB.prepare("SELECT user_id FROM allowlist ORDER BY added").all();
+  const recipients = [ownerId, ...results.map((r) => r.user_id).filter((id) => !isOwner(env, id))];
+
+  let sent = 0;
+  for (const chatId of recipients) {
+    const res = await tg(env, "sendMessage", { chat_id: chatId, text: message });
+    if (res.ok) sent++;
+  }
+  const failed = recipients.length - sent;
+  console.log("broadcast", { recipients: recipients.length, sent, failed });
+
+  await tg(env, "sendMessage", {
+    chat_id: ownerId,
+    text: `📣 Sent to ${sent} of ${recipients.length} (you included)` + (failed > 0 ? `. ${failed} failed, see logs.` : "."),
   });
 }
 
@@ -402,7 +432,7 @@ async function handleMessage(message, env, url) {
   await upsertUser(env, from);
   const text = message.text || "";
 
-  const isOwnerCommand = /^\/(allow|remove|users)\b/.test(text);
+  const isOwnerCommand = /^\/(allow|remove|users|broadcast)\b/.test(text);
   if (isOwnerCommand) {
     if (isOwner(env, from.id)) {
       await handleOwnerCommand(env, from.id, text);
