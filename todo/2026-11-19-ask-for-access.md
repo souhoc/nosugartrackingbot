@@ -17,7 +17,7 @@ Today a non-allowed user only gets "This bot is private. Your user id is X. Send
 - The user gets "Request sent. You'll get a message if the owner says yes."
 
 ## Notes
-- Decided: one request per person, stored in D1 (`access_requests`). A second tap says "Already asked, waiting for the owner." Ignored requests are kept, so an ignored person can't ask again. Allowing deletes the row (so after a later /remove they can ask again).
+- Decided: one request per person, stored in D1 (`access_requests`). Once asked, the button is hidden: pending → "Your request is waiting for the owner", ignored → plain "This bot is private" (decided, option 2). Old buttons answer "Already asked." Ignored requests are kept, so an ignored person can't ask again. Allowing deletes the row (so after a later /remove they can ask again).
 - Decided: button only, no `/request` command.
 - Callback data must stay under 64 bytes, e.g. `access|allow|<id>`.
 

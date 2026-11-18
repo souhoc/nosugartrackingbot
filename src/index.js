@@ -277,7 +277,7 @@ async function askForAccess(query, env) {
     .run();
   if (meta.changes === 0) {
     console.log("access request again", from.id);
-    await tg(env, "answerCallbackQuery", { callback_query_id: query.id, text: "Already asked, waiting for the owner." });
+    await tg(env, "answerCallbackQuery", { callback_query_id: query.id, text: "Already asked." });
     return;
   }
 
@@ -605,11 +605,25 @@ async function handleMessage(message, env, url) {
 
   if (!(await isAllowed(env, from.id))) {
     console.log("message from non-allowed user", from.id);
-    await tg(env, "sendMessage", {
-      chat_id: chatId,
-      text: `This bot is private. Your user id is ${from.id}. Tap below to ask the owner for access.`,
-      reply_markup: { inline_keyboard: [[{ text: "🙋 Ask for access", callback_data: "access|ask" }]] },
-    });
+    // The button only for people who never asked. Pending: say so. Ignored: plain "private",
+    // without saying they were refused.
+    const request = await env.DB.prepare("SELECT ignored FROM access_requests WHERE user_id = ?")
+      .bind(from.id)
+      .first();
+    if (!request) {
+      await tg(env, "sendMessage", {
+        chat_id: chatId,
+        text: `This bot is private. Your user id is ${from.id}. Tap below to ask the owner for access.`,
+        reply_markup: { inline_keyboard: [[{ text: "🙋 Ask for access", callback_data: "access|ask" }]] },
+      });
+    } else if (!request.ignored) {
+      await tg(env, "sendMessage", {
+        chat_id: chatId,
+        text: "This bot is private. 🙋 Your request is waiting for the owner.",
+      });
+    } else {
+      await tg(env, "sendMessage", { chat_id: chatId, text: `This bot is private. Your user id is ${from.id}.` });
+    }
     return;
   }
 

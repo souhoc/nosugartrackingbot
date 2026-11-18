@@ -115,7 +115,7 @@ You need: a Cloudflare account, the [`cf` CLI](https://developers.cloudflare.com
 2. They tap it. You get "Name (@username, id) asks for access" with **✅ Allow** / **❌ Ignore**. (Or they send you the id and you send `/allow <id>`.)
 3. Allowed: they get "You now have access" and send `/start`. Ignored: they are not told.
 
-One request per person: tapping again only says "Already asked". After an ignore they can't ask again (delete their row in `access_requests` to let them). After `/remove` they can ask again.
+One request per person. Once they asked, the button is gone: while pending they see "Your request is waiting for the owner", after an ignore just "This bot is private" (they are never told). To let an ignored person ask again, delete their row in `access_requests`. After `/remove` they can ask again.
 
 ## Local dev
 
