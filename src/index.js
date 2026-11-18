@@ -802,6 +802,8 @@ function draw(d) {
   line.font = Font.mediumSystemFont(11);
   line.textColor = C.text;
 
+  widget.addSpacer(4);
+
   const best = widget.addText("🏆 Best " + d.best);
   best.font = Font.systemFont(11);
   best.textColor = C.dim;
