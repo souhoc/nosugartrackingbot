@@ -3,6 +3,7 @@ title: A stranger can ask the owner for access from the bot
 date: 2026-11-19
 state: in progress
 branch: feat/ask-for-access
+pr: https://github.com/souhoc/nosugartrackingbot/pull/7
 type: feature
 ---
 
