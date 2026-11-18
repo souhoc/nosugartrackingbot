@@ -1,7 +1,7 @@
 ---
 title: The bot sets its own command menus from the code
 date: 2026-11-19
-state: in progress
+state: completed
 branch: docs/command-menu
 pr: https://github.com/souhoc/nosugartrackingbot/pull/6
 type: feature
@@ -25,3 +25,4 @@ The "/" command menu is stored on Telegram's side and was set by hand, so it dri
 - 2026-11-19 created (in progress)
 - 2026-11-19 scope changed: menus set by the bot instead of a README step
 - 2026-11-19 scope changed: menus also set on every release (deploy step)
+- 2026-11-19 completed — merged PR #6
