@@ -57,7 +57,9 @@ Data lives in D1: `users`, `allowlist`, `reminders`, `checks` (one row per user/
 - Reward: `floor(new days / 7) + floor(new days / 30)` cheat days, e.g. 7 → 1, 14 → 2, 30 → 5, 90 → 15. With the streak counted, only the days still to go count as new: a 30-day target on a 20-day streak pays for 10. That also means a counted streak needs at least 7 new days.
 - The bot sends a message when a target is reached. It's then done: set a new one if you want.
 - Balance is capped at 15. Anything above is lost (the message says how many).
-- Use a cheat day on a sugar day from the calendar (asks to confirm, can't be undone). That day then acts like a gray day: it doesn't break the streak or count in it. It still counts in "sugar days".
+- Use a cheat day on a sugar day from the calendar (asks to confirm). That day then acts like a gray day: it doesn't break the streak or count in it. It still counts in "sugar days". After logging sugar, the bot offers the button if you have cheat days.
+- No undo button. The cheat day only comes back if its day stops being a sugar day (`/undo` of the sugar, or the answer changed to clean).
+- Progress only counts from the target's start (first day of the counted streak, or the day it was set). A cheat day on an older sugar day doesn't add progress.
 
 ## Deploy your own
 

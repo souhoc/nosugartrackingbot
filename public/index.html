@@ -170,10 +170,12 @@
         return;
       }
       data = await res.json();
-      const [y, m] = data.today.split("-").map(Number);
+      // ?date=YYYY-MM-DD opens on that day (the bot's "Use a cheat day" button).
+      const askedDate = new URLSearchParams(location.search).get("date");
+      selected = /^\d{4}-\d{2}-\d{2}$/.test(askedDate || "") && askedDate <= data.today ? askedDate : data.today;
+      const [y, m] = selected.split("-").map(Number);
       viewYear = y;
       viewMonth = m - 1;
-      selected = data.today;
       if (view === "reminders") openReminders();
       else if (view === "target") openTarget();
       else render();
@@ -377,7 +379,8 @@
       render();
     }
 
-    // Same rule as the server: counting the streak only pays for the new days.
+    // Preview only, the server decides. Keep in sync with cheatReward and handleSaveTarget in src/index.js:
+    // counting the streak only pays for the new days.
     function targetPreview() {
       const base = targetDraft.countStreak ? data.streak : 0;
       const days = targetDraft.days;
@@ -536,30 +539,17 @@
 
     async function saveReminders() {
       document.getElementById("save").disabled = true;
-      let res, body;
-      try {
-        res = await fetch("/api/reminders", {
-          method: "PUT",
-          headers: { Authorization: "tma " + tg.initData, "content-type": "application/json" },
-          body: JSON.stringify({ reminders: draft.map((r) => ({ ...r, time: toFiveMinutes(r.time) })) }),
-        });
-        body = await res.json().catch(() => ({}));
-      } catch (err) {
-        console.error(err);
-        saveMsg = '<p class="msg err">Not saved: no connection. Try again.</p>';
+      const res = await apiPut("/api/reminders", {
+        reminders: draft.map((r) => ({ ...r, time: toFiveMinutes(r.time) })),
+      });
+      if (!res.ok) {
+        saveMsg = `<p class="msg err">Not saved: ${esc(res.error)}</p>`;
         render(); // keeps the draft, re-enables Save
         return;
       }
-      if (!res.ok) {
-        saveMsg = `<p class="msg err">Not saved: ${esc(body.error || res.status)}</p>`;
-        render();
-        return;
-      }
-      // Streaks depend on the reminder count (gray days), so reload the stats too.
-      const fresh = await fetchStats().catch(() => null);
-      if (fresh?.ok) data = await fresh.json();
-      data.reminders = body.reminders;
-      draft = body.reminders.map((r) => ({ ...r }));
+      await reload();
+      data.reminders = res.body.reminders;
+      draft = res.body.reminders.map((r) => ({ ...r }));
       saveMsg = '<p class="msg">✅ Saved. I sent you the list in the chat.</p>';
       tg?.HapticFeedback?.notificationOccurred("success");
       render();

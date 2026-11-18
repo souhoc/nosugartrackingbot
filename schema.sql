@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS moments (
 CREATE INDEX IF NOT EXISTS moments_user ON moments (user_id, id);
 
 -- Targets: reach `days` clean days to earn cheat days. One active target per user (reached IS NULL).
--- start NULL = the current streak counts; otherwise only days from `start` (user's local date) count.
--- base = progress when set (the streak, or 0), so the reward only pays for new days.
+-- Only days from `start` (user's local date) count: the first day of the current streak if it was
+-- counted, else the day it was set. base = progress when set (the streak, or 0): the reward pays only new days.
 CREATE TABLE IF NOT EXISTS targets (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
