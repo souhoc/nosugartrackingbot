@@ -71,6 +71,26 @@
       border-radius: 50%; background: currentColor;
     }
 
+    /* Cheat day: gray like an empty day, with a small clover. */
+    .day.cheat::before { content: "🍀"; position: absolute; top: 2px; right: 3px; font-size: 9px; line-height: 1; }
+
+    .goal { background: var(--card); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+    .goal .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .goal .big { font-size: 17px; font-weight: 600; }
+    .bar { height: 8px; border-radius: 4px; background: var(--empty); overflow: hidden; }
+    .bar > div { height: 100%; background: var(--clean); border-radius: 4px; }
+    .goal .btn { background: var(--bg); }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chips .btn { flex: 1 1 0; min-width: 52px; padding: 0 8px; }
+    .chips .btn.on { background: var(--tg-theme-button-color, #2f80ed); color: var(--tg-theme-button-text-color, #fff); }
+    .field { width: 100%; min-height: 44px; border: 1px solid color-mix(in srgb, var(--hint) 30%, transparent);
+      border-radius: 10px; padding: 8px 12px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; }
+    .choice { display: flex; gap: 10px; align-items: flex-start; background: var(--card); border-radius: 12px;
+      padding: 12px; cursor: pointer; }
+    .choice input { width: 20px; height: 20px; margin: 1px 0 0; flex-shrink: 0; accent-color: var(--ring); }
+    .card { background: var(--card); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+
     .legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; font-size: 12px; color: var(--hint); }
     .legend span { display: flex; align-items: center; gap: 6px; }
     .sw { width: 10px; height: 10px; border-radius: 3px; }
@@ -127,9 +147,12 @@
     let data = null;
     let viewYear, viewMonth; // month shown (0-based month)
     let selected = null;
-    let view = new URLSearchParams(location.search).get("view") === "reminders" ? "reminders" : "calendar";
+    const startView = new URLSearchParams(location.search).get("view");
+    let view = ["reminders", "target"].includes(startView) ? startView : "calendar";
     let draft = []; // reminders being edited
     let saveMsg = "";
+    let targetDraft = { days: 30, countStreak: true }; // target being set
+    let dayMsg = ""; // error under the day card (cheat day)
 
     const FLAME =
       '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" ' +
@@ -152,6 +175,7 @@
       viewMonth = m - 1;
       selected = data.today;
       if (view === "reminders") openReminders();
+      else if (view === "target") openTarget();
       else render();
     }
 
@@ -173,6 +197,7 @@
 
     function render() {
       if (view === "reminders") return renderReminders();
+      if (view === "target") return renderTarget();
       const first = new Date(Date.UTC(viewYear, viewMonth, 1));
       const daysInMonth = new Date(Date.UTC(viewYear, viewMonth + 1, 0)).getUTCDate();
       const offset = (first.getUTCDay() + 6) % 7; // Monday first
@@ -201,6 +226,7 @@
           <div class="stat"><b>${data.sugar}</b><span>sugar days</span></div>
           <div class="stat"><b>${data.refused}</b><span>refused</span></div>
         </div>
+        ${goalHtml()}
         <div class="cal-head">
           <button id="prev" aria-label="Previous month">‹</button>
           <h2>${title}</h2>
@@ -212,18 +238,43 @@
           <span><span class="sw" style="background: var(--sugar)"></span>Sugar</span>
           <span><span class="sw" style="background: var(--empty)"></span>Nothing logged</span>
           <span><span class="dot"></span>Refused sugar</span>
+          <span>🍀 Cheat day</span>
         </div>
         <div class="detail">${detailHtml(selected)}</div>
         <button class="btn" id="edit-reminders">⏰ Reminders (${data.reminders.length})</button>
       `;
 
       document.getElementById("edit-reminders").onclick = openReminders;
+      document.getElementById("set-target").onclick = openTarget;
+      const cheatBtn = document.getElementById("cheat");
+      if (cheatBtn) cheatBtn.onclick = () => useCheat(cheatBtn.dataset.date);
 
       document.getElementById("prev").onclick = () => moveMonth(-1);
       document.getElementById("next").onclick = () => moveMonth(1);
       app.querySelectorAll(".day[data-date]").forEach((el) => {
-        el.onclick = () => { selected = el.dataset.date; render(); };
+        el.onclick = () => { selected = el.dataset.date; dayMsg = ""; render(); };
       });
+    }
+
+    // Target progress and cheat day balance, under the stats.
+    function goalHtml() {
+      const cheats = `<span class="muted">🍀 ${data.cheatDays} cheat day${data.cheatDays === 1 ? "" : "s"}</span>`;
+      const t = data.target;
+      if (!t) {
+        return `<div class="goal">
+          <div class="row"><span class="big">🎯 No target</span>${cheats}</div>
+          <span class="muted" style="font-size: 13px">Reach a target to earn cheat days.</span>
+          <button class="btn" id="set-target">Set a target</button>
+        </div>`;
+      }
+      const pct = Math.min(100, Math.round((t.progress / t.days) * 100));
+      return `<div class="goal">
+        <div class="row"><span class="big">🎯 ${t.left} day${t.left === 1 ? "" : "s"} to go</span>${cheats}</div>
+        <div class="bar" role="progressbar" aria-valuenow="${t.progress}" aria-valuemax="${t.days}"><div style="width: ${pct}%"></div></div>
+        <div class="row"><span class="muted" style="font-size: 13px">${t.progress} / ${t.days} clean days</span>
+          <span class="muted" style="font-size: 13px">reward 🍀 ${t.reward}</span></div>
+        <button class="btn" id="set-target">Change target</button>
+      </div>`;
     }
 
     function detailHtml(date) {
@@ -258,7 +309,161 @@
       const list = rows.map((r) =>
         `<div class="row"><span><span class="muted">${esc(r.time)}</span> ${r.name}</span>${r.answer}</div>`).join("");
 
-      return `<span class="muted" style="font-size: 13px">${label}</span>${list || '<span class="muted">Nothing logged.</span>'}`;
+      return `<span class="muted" style="font-size: 13px">${label}</span>${list || '<span class="muted">Nothing logged.</span>'}` +
+        cheatHtml(date) + dayMsg;
+    }
+
+    // Sugar day: offer a cheat day. Cheat day: say so (it can't be given back).
+    function cheatHtml(date) {
+      const status = data.calendar[date]?.status;
+      if (status === "cheat") return "<hr><span>🍀 Cheat day used: this day doesn't break your streak.</span>";
+      if (status !== "sugar") return "";
+      if (data.cheatDays === 0) {
+        return '<hr><span class="muted" style="font-size: 13px">No cheat days. Reach a target to earn some.</span>';
+      }
+      return `<hr><span class="muted" style="font-size: 13px">A cheat day keeps your streak: this day won't break it, and won't count.</span>
+        <button class="btn primary" id="cheat" data-date="${date}">🍀 Use a cheat day (${data.cheatDays} left)</button>`;
+    }
+
+    // Can't be undone, so ask first. Telegram's dialog, or the browser's outside Telegram.
+    function confirmBox(text) {
+      if (tg?.showConfirm) return new Promise((resolve) => tg.showConfirm(text, resolve));
+      return Promise.resolve(window.confirm(text));
+    }
+
+    async function useCheat(date) {
+      if (!(await confirmBox("Use 1 cheat day on this day? It can't be undone."))) return;
+      document.getElementById("cheat").disabled = true;
+      const res = await apiPut("/api/cheat", { date });
+      if (!res.ok) {
+        dayMsg = `<p class="msg err">${esc(res.error)}</p>`;
+        render();
+        return;
+      }
+      dayMsg = "";
+      await reload();
+      tg?.HapticFeedback?.notificationOccurred("success");
+      render();
+    }
+
+    // PUT JSON to the API. Returns { ok, error, body } and never throws.
+    async function apiPut(path, payload) {
+      try {
+        const res = await fetch(path, {
+          method: "PUT",
+          headers: { Authorization: "tma " + tg.initData, "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const body = await res.json().catch(() => ({}));
+        return { ok: res.ok, error: body.error || "error " + res.status, body };
+      } catch (err) {
+        console.error(err);
+        return { ok: false, error: "no connection, try again" };
+      }
+    }
+
+    async function reload() {
+      const fresh = await fetchStats().catch(() => null);
+      if (fresh?.ok) data = await fresh.json();
+    }
+
+    // ---------- Target ----------
+
+    function openTarget() {
+      const t = data.target;
+      targetDraft = { days: t ? t.days : 30, countStreak: t ? t.countsStreak : data.streak > 0 };
+      saveMsg = "";
+      view = "target";
+      render();
+    }
+
+    // Same rule as the server: counting the streak only pays for the new days.
+    function targetPreview() {
+      const base = targetDraft.countStreak ? data.streak : 0;
+      const days = targetDraft.days;
+      const newDays = days - base;
+      if (!Number.isInteger(days) || days < data.minTarget || days > data.maxTarget) {
+        return { error: `Pick ${data.minTarget} to ${data.maxTarget} days.` };
+      }
+      if (newDays < data.minTarget) {
+        return { error: `With your ${base}-day streak counted, pick at least ${base + data.minTarget} days.` };
+      }
+      return { newDays, reward: Math.floor(newDays / 7) + Math.floor(newDays / 30) };
+    }
+
+    function renderTarget() {
+      const chips = [7, 14, 30, 60, 90].map((n) =>
+        `<button class="btn" data-chip="${n}">${n}</button>`).join("");
+
+      app.innerHTML = `
+        <div class="page-head">
+          <button class="btn" id="back" aria-label="Back to calendar">‹</button>
+          <h2>Target</h2>
+        </div>
+        <p class="note">Reach a number of clean days to earn cheat days. A sugar day sends progress back to 0.
+          Days with nothing logged are skipped.</p>
+        <div class="chips">${chips}</div>
+        <input class="field" id="days" type="number" inputmode="numeric" min="${data.minTarget}" max="${data.maxTarget}"
+          value="${esc(targetDraft.days)}" aria-label="Target in days">
+        ${data.streak > 0 ? `
+        <label class="choice"><input type="radio" name="from" value="streak" ${targetDraft.countStreak ? "checked" : ""}>
+          <span>Count my current streak (${data.streak} day${data.streak === 1 ? "" : "s"})<br>
+          <span class="muted" style="font-size: 13px">Reached sooner. The reward only counts new days.</span></span></label>
+        <label class="choice"><input type="radio" name="from" value="today" ${targetDraft.countStreak ? "" : "checked"}>
+          <span>Start from today</span></label>` : ""}
+        <div id="preview"></div>
+        <button class="btn primary" id="save">${data.target ? "Replace target" : "Set target"}</button>
+        ${data.target ? '<button class="btn" id="remove">Remove target</button>' : ""}
+        ${saveMsg}
+        <p class="note">Cheat days: about 1 per week of target, +1 per 30 days. Max ${data.maxCheatDays}.
+          Use one on a sugar day in the calendar: that day won't break your streak and won't count in it.</p>
+      `;
+
+      document.getElementById("back").onclick = () => { view = "calendar"; render(); };
+      const daysInput = document.getElementById("days");
+      app.querySelectorAll("[data-chip]").forEach((el) => {
+        el.onclick = () => {
+          targetDraft.days = Number(el.dataset.chip);
+          daysInput.value = el.dataset.chip;
+          refreshTarget();
+        };
+      });
+      daysInput.oninput = () => { targetDraft.days = Number(daysInput.value); refreshTarget(); };
+      app.querySelectorAll('input[name="from"]').forEach((el) => {
+        el.onchange = () => { targetDraft.countStreak = el.value === "streak"; refreshTarget(); };
+      });
+      refreshTarget();
+      document.getElementById("save").onclick = () =>
+        saveTarget({ days: targetDraft.days, countStreak: data.streak > 0 && targetDraft.countStreak });
+      const remove = document.getElementById("remove");
+      if (remove) remove.onclick = () => saveTarget({ days: null });
+    }
+
+    // Updates the preview, chips and Save button in place: no full redraw while typing.
+    function refreshTarget() {
+      const p = targetPreview();
+      document.getElementById("preview").innerHTML = p.error
+        ? `<p class="msg err">${esc(p.error)}</p>`
+        : `<div class="card"><span style="font-size: 17px; font-weight: 600">${p.newDays} day${p.newDays === 1 ? "" : "s"} to go</span>
+            <span class="muted">Reward: 🍀 ${p.reward} cheat day${p.reward === 1 ? "" : "s"}</span></div>`;
+      document.getElementById("save").disabled = Boolean(p.error);
+      app.querySelectorAll("[data-chip]").forEach((el) => {
+        el.classList.toggle("on", Number(el.dataset.chip) === targetDraft.days);
+      });
+    }
+
+    async function saveTarget(payload) {
+      document.getElementById("save").disabled = true;
+      const res = await apiPut("/api/target", payload);
+      if (!res.ok) {
+        saveMsg = `<p class="msg err">Not saved: ${esc(res.error)}</p>`;
+        render();
+        return;
+      }
+      await reload();
+      tg?.HapticFeedback?.notificationOccurred("success");
+      view = "calendar";
+      render();
     }
 
     // ---------- Reminders editor ----------

@@ -13,6 +13,12 @@ const MAX_REMINDERS = 12;
 // Cron runs every 5 min, so reminder times must be on a 5-minute mark.
 const TIME_RE = /^([01]\d|2[0-3]):[0-5][05]$/;
 
+// Targets and cheat days.
+const MIN_TARGET = 7; // at least 7 new clean days to earn anything
+const MAX_TARGET = 365;
+const MAX_CHEAT_DAYS = 15; // balance cap, stops hoarding
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 const BTN_REFUSED = "💪 Refused sugar";
 const BTN_SUGAR = "🍬 Had sugar";
 
@@ -27,6 +33,12 @@ export default {
     }
     if (url.pathname === "/api/reminders" && request.method === "PUT") {
       return handleSaveReminders(request, env, url);
+    }
+    if (url.pathname === "/api/target" && request.method === "PUT") {
+      return handleSaveTarget(request, env);
+    }
+    if (url.pathname === "/api/cheat" && request.method === "PUT") {
+      return handleCheat(request, env, url);
     }
     if (url.pathname === "/api/widget") {
       return handleWidget(request, env);
@@ -284,12 +296,12 @@ async function handleCallback(query, env, url) {
   if (query.data.startsWith("setup|")) {
     await handleSetupChoice(query, env, url);
   } else {
-    await handleAnswer(query, env);
+    await handleAnswer(query, env, url);
   }
 }
 
 // Callback data: "date|slot|0or1". Late answers count for the asked day.
-async function handleAnswer(query, env) {
+async function handleAnswer(query, env, url) {
   const userId = query.from.id;
   const [date, slot, sugarFlag] = query.data.split("|");
   const ateSugar = sugarFlag === "1";
@@ -303,9 +315,9 @@ async function handleAnswer(query, env) {
     .run();
   console.log("recorded answer", { userId, date, slot, ateSugar });
 
-  const { stats } = await userStats(env, userId);
+  const s = await userStats(env, userId);
   const result = ateSugar ? "🍬 had sugar" : "✅ no sugar";
-  const text = `${snap.emoji} ${snap.message}\n→ ${result} (${date})\n🔥 Streak: ${stats.streak} day(s)`;
+  const text = `${snap.emoji} ${snap.message}\n→ ${result} (${date})\n🔥 Streak: ${s.stats.streak} day(s)`;
 
   await tg(env, "answerCallbackQuery", { callback_query_id: query.id });
   await tg(env, "editMessageText", {
@@ -313,6 +325,7 @@ async function handleAnswer(query, env) {
     message_id: query.message.message_id,
     text,
   });
+  await checkTarget(env, userId, url.origin, s);
 }
 
 // ---------- Onboarding: new users pick their reminders ----------
@@ -413,11 +426,11 @@ async function handleMessage(message, env, url) {
   }
 
   if (text === BTN_REFUSED || text.startsWith("/refused")) {
-    await logMoment(env, from.id, "refused");
+    await logMoment(env, from.id, "refused", url.origin);
     return;
   }
   if (text === BTN_SUGAR || text.startsWith("/sugar")) {
-    await logMoment(env, from.id, "sugar");
+    await logMoment(env, from.id, "sugar", url.origin);
     return;
   }
   if (text.startsWith("/undo")) {
@@ -446,13 +459,16 @@ async function handleMessage(message, env, url) {
   }
 
   if (text.startsWith("/stats")) {
-    const { stats } = await userStats(env, from.id);
+    const { stats, target, cheatDays } = await userStats(env, from.id);
+    const targetLine = target
+      ? `🎯 Target: ${target.progress}/${target.days} (${target.left} to go)`
+      : "🎯 No target. Set one in the calendar to earn cheat days.";
     await tg(env, "sendMessage", {
       chat_id: chatId,
       text:
         `🔥 Current streak: ${stats.streak}\n🏆 Best streak: ${stats.best}\n` +
         `✅ Clean days: ${stats.clean}\n🍬 Sugar days: ${stats.sugar}\n` +
-        `💪 Times refused: ${stats.refused}`,
+        `💪 Times refused: ${stats.refused}\n\n${targetLine}\n🍀 Cheat days: ${cheatDays}`,
     });
     return;
   }
@@ -520,7 +536,7 @@ async function setTimezone(env, userId, tz) {
   });
 }
 
-async function logMoment(env, userId, kind) {
+async function logMoment(env, userId, kind, origin) {
   const tz = await userTimezone(env, userId);
   const { date, time } = localNow(Date.now(), tz);
   await env.DB.prepare("INSERT INTO moments (user_id, date, time, kind, created) VALUES (?, ?, ?, ?, ?)")
@@ -528,12 +544,28 @@ async function logMoment(env, userId, kind) {
     .run();
   console.log("logged moment", { userId, date, time, kind });
 
-  const { stats } = await userStats(env, userId);
-  const text =
-    kind === "refused"
-      ? `💪 Nice, logged at ${time}. You've refused sugar ${stats.refused} time(s).\n🔥 Streak: ${stats.streak} day(s)`
-      : `🍬 Logged at ${time}. Today counts as a sugar day. Tomorrow starts a new streak.`;
-  await tg(env, "sendMessage", { chat_id: userId, text });
+  const s = await userStats(env, userId);
+  if (kind === "refused") {
+    await tg(env, "sendMessage", {
+      chat_id: userId,
+      text: `💪 Nice, logged at ${time}. You've refused sugar ${s.stats.refused} time(s).\n🔥 Streak: ${s.stats.streak} day(s)`,
+    });
+    await checkTarget(env, userId, origin, s);
+    return;
+  }
+
+  // Sugar: offer a cheat day if they have one (already used on today = nothing to offer).
+  const canCheat = s.cheatDays > 0 && !s.days[date]?.cheat;
+  await tg(env, "sendMessage", {
+    chat_id: userId,
+    text: canCheat
+      ? `🍬 Logged at ${time}. Today counts as a sugar day.\n🍀 You have ${s.cheatDays} cheat day(s): ` +
+        "use one and today won't break your streak."
+      : `🍬 Logged at ${time}. Today counts as a sugar day. Tomorrow starts a new streak.`,
+    reply_markup: canCheat
+      ? { inline_keyboard: [[{ text: "🍀 Use a cheat day", web_app: { url: `${origin}/?view=calendar` } }]] }
+      : undefined,
+  });
 }
 
 async function undoMoment(env, userId) {
@@ -601,14 +633,163 @@ async function handleStats(request, env) {
     return Response.json({ error: "unauthorized" }, { status: 403 });
   }
 
-  const { days, today, reminders, stats } = await userStats(env, user.id);
+  const { days, today, reminders, stats, target, cheatDays } = await userStats(env, user.id);
 
   const calendar = {};
   for (const [date, day] of Object.entries(days)) {
     calendar[date] = { status: dayStatus(day), checks: day.checks, moments: day.moments };
   }
 
-  return Response.json({ today, reminders, maxReminders: MAX_REMINDERS, calendar, ...stats });
+  return Response.json({
+    today, reminders, maxReminders: MAX_REMINDERS, calendar, ...stats,
+    target, cheatDays, maxCheatDays: MAX_CHEAT_DAYS, minTarget: MIN_TARGET, maxTarget: MAX_TARGET,
+  });
+}
+
+// ---------- Targets and cheat days ----------
+
+// Cheat days earned for a target of `newDays` new clean days: about 1 per week,
+// plus 1 per full 30 days so one big target pays a bit more than several small ones.
+function cheatReward(newDays) {
+  return Math.floor(newDays / 7) + Math.floor(newDays / 30);
+}
+
+// Balance = earned - used. A subquery, so writes can check it in the same statement.
+const BALANCE_SQL = `(COALESCE((SELECT SUM(earned) FROM targets WHERE user_id = ?), 0)
+  - (SELECT COUNT(*) FROM cheats WHERE user_id = ?))`;
+
+// The active target with its progress, or null. `days` comes from loadDays.
+function targetProgress(row, days, today) {
+  if (!row) return null;
+  // Never walk back past the first record. No start = the whole current streak counts.
+  const first = Object.keys(days).sort()[0];
+  const from = row.start && row.start > first ? row.start : first;
+  const progress = first ? cleanRun(days, today, from) : 0;
+  return {
+    days: row.days,
+    progress,
+    left: Math.max(0, row.days - progress),
+    countsStreak: row.start === null,
+    reward: cheatReward(row.days - row.base),
+  };
+}
+
+// Mini App: set a new target (replaces the active one), or remove it with { days: null }.
+async function handleSaveTarget(request, env) {
+  const user = await miniAppUser(request, env);
+  if (!user) {
+    console.warn("save target: unauthorized");
+    return Response.json({ error: "unauthorized" }, { status: 403 });
+  }
+  const body = await request.json().catch(() => null);
+  const removeActive = env.DB.prepare("DELETE FROM targets WHERE user_id = ? AND reached IS NULL").bind(user.id);
+
+  if (body?.days === null) {
+    await removeActive.run();
+    console.log("target removed", user.id);
+    return Response.json({ ok: true });
+  }
+
+  const days = body?.days;
+  if (!Number.isInteger(days) || days < MIN_TARGET || days > MAX_TARGET) {
+    return Response.json({ error: `target must be ${MIN_TARGET} to ${MAX_TARGET} days` }, { status: 400 });
+  }
+  const { stats, today } = await userStats(env, user.id);
+  const countsStreak = body.countStreak === true;
+  // Counting the streak gets you there sooner, but the reward only pays for new days.
+  // Without this, setting a 7-day target on a 30-day streak would pay out at once, again and again.
+  const base = countsStreak ? stats.streak : 0;
+  if (days - base < MIN_TARGET) {
+    return Response.json(
+      { error: `with your ${base}-day streak counted, the target must be at least ${base + MIN_TARGET} days` },
+      { status: 400 }
+    );
+  }
+
+  await env.DB.batch([
+    removeActive,
+    env.DB.prepare("INSERT INTO targets (user_id, days, base, start, created) VALUES (?, ?, ?, ?, ?)").bind(
+      user.id, days, base, countsStreak ? null : today, new Date().toISOString()
+    ),
+  ]);
+  console.log("target set", { userId: user.id, days, base, countsStreak });
+
+  const reward = cheatReward(days - base);
+  await tg(env, "sendMessage", {
+    chat_id: user.id,
+    text: `🎯 New target: ${days} clean days${countsStreak ? ` (your ${base}-day streak counts)` : ", from today"}.\n` +
+      `Reward: 🍀 ${reward} cheat day(s).`,
+  });
+  return Response.json({ ok: true });
+}
+
+// Mini App: { date } covers a sugar day with a cheat day. No way back: giving it back after it
+// helped reach a target would pay the reward and refund the cheat day. The page asks to confirm.
+async function handleCheat(request, env, url) {
+  const user = await miniAppUser(request, env);
+  if (!user) {
+    console.warn("cheat: unauthorized");
+    return Response.json({ error: "unauthorized" }, { status: 403 });
+  }
+  const body = await request.json().catch(() => null);
+  const date = body?.date;
+  if (!DATE_RE.test(date || "")) return Response.json({ error: "bad date" }, { status: 400 });
+
+  const { days, today } = await userStats(env, user.id);
+  if (date > today) return Response.json({ error: "that day hasn't happened yet" }, { status: 400 });
+  if (dayStatus(days[date]) !== "sugar") {
+    return Response.json({ error: "only a sugar day can use a cheat day" }, { status: 400 });
+  }
+
+  // One statement: the balance check and the insert can't be split by a double tap.
+  const { meta } = await env.DB.prepare(
+    `INSERT OR IGNORE INTO cheats (user_id, date, created) SELECT ?, ?, ? WHERE ${BALANCE_SQL} > 0`
+  )
+    .bind(user.id, date, new Date().toISOString(), user.id, user.id)
+    .run();
+  if (meta.changes !== 1) {
+    console.warn("cheat day refused, none left", { userId: user.id, date });
+    return Response.json({ error: "no cheat days left" }, { status: 400 });
+  }
+  console.log("cheat day used", { userId: user.id, date });
+
+  // Covering an old sugar day can extend the run enough to reach the target.
+  await checkTarget(env, user.id, url.origin, await userStats(env, user.id));
+  return Response.json({ ok: true });
+}
+
+// After anything that can raise progress: if the active target is reached, mark it and pay the reward.
+// `s` is a fresh userStats result.
+async function checkTarget(env, userId, origin, s) {
+  if (!s.target || s.target.left > 0) return;
+
+  // Marking it reached and computing the capped reward is one statement, so two requests
+  // at once can't both pay. The SUM includes this row with earned = 0.
+  const { meta } = await env.DB.prepare(
+    `UPDATE targets SET reached = ?, earned = MAX(0, MIN(?, ? - ${BALANCE_SQL}))
+     WHERE user_id = ? AND reached IS NULL`
+  )
+    .bind(s.today, s.target.reward, MAX_CHEAT_DAYS, userId, userId, userId)
+    .run();
+  if (meta.changes !== 1) return;
+
+  const row = await env.DB.prepare(
+    `SELECT earned, ${BALANCE_SQL} AS balance FROM targets WHERE user_id = ? AND reached IS NOT NULL ORDER BY id DESC LIMIT 1`
+  )
+    .bind(userId, userId, userId)
+    .first();
+  const lost = s.target.reward - row.earned;
+  console.log("target reached", { userId, days: s.target.days, earned: row.earned, lost });
+
+  const lostText = lost > 0 ? ` (${lost} lost, max ${MAX_CHEAT_DAYS})` : "";
+  await tg(env, "sendMessage", {
+    chat_id: userId,
+    text:
+      `🎯 Target reached: ${s.target.days} clean days!\n` +
+      `🍀 +${row.earned} cheat day(s)${lostText}. You have ${row.balance}.\n\n` +
+      "Set a new target when you're ready.",
+    reply_markup: { inline_keyboard: [[{ text: "🎯 New target", web_app: { url: `${origin}/?view=target` } }]] },
+  });
 }
 
 // Telegram Mini App initData check:
@@ -682,17 +863,24 @@ async function handleWidget(request, env) {
     return Response.json({ error: "unauthorized" }, { status: 403 });
   }
 
-  const { days, today, stats } = await userStats(env, userId);
+  const { days, today, stats, target, cheatDays } = await userStats(env, userId);
+
+  // Widget scripts already installed only know clean/sugar/none: a cheat day is sent as
+  // "none" (gray, which is how it looks anyway), with `cheatToday` for newer scripts.
+  const widgetStatus = (date) => (dayStatus(days[date]) === "cheat" ? "none" : dayStatus(days[date]));
 
   // Last 7 days, oldest first, today last.
   const week = [];
   for (let i = 6; i >= 0; i--) {
     const date = shiftDay(today, -i);
-    week.push({ date, status: dayStatus(days[date]) });
+    week.push({ date, status: widgetStatus(date) });
   }
   const refusedToday = (days[today]?.moments || []).filter((m) => m.kind === "refused").length;
+  const cheatToday = dayStatus(days[today]) === "cheat";
 
-  return Response.json({ today, todayStatus: dayStatus(days[today]), refusedToday, week, ...stats });
+  return Response.json({
+    today, todayStatus: widgetStatus(today), cheatToday, refusedToday, week, ...stats, target, cheatDays,
+  });
 }
 
 async function sendWidgetScript(env, userId, origin) {
@@ -793,7 +981,7 @@ function draw(d) {
 
   widget.addSpacer(8);
 
-  const status = {
+  const status = d.cheatToday ? "🍀 Cheat day today" : {
     clean: "✅ Clean today",
     sugar: "🍬 Sugar today",
     none: "Nothing logged today",
@@ -804,9 +992,12 @@ function draw(d) {
 
   widget.addSpacer(4);
 
-  const best = widget.addText("🏆 Best " + d.best);
-  best.font = Font.systemFont(11);
-  best.textColor = C.dim;
+  // One line at the bottom: days left to the target if there is one, else the best streak.
+  let bottom = d.target ? "🎯 " + d.target.left + (d.target.left === 1 ? " day to go" : " days to go") : "🏆 Best " + d.best;
+  if (d.cheatDays > 0) bottom += "  🍀" + d.cheatDays;
+  const last = widget.addText(bottom);
+  last.font = Font.systemFont(11);
+  last.textColor = C.dim;
 }
 `;
 
@@ -814,27 +1005,34 @@ function draw(d) {
 
 // Everything needed to show a user's stats.
 async function userStats(env, userId) {
-  const [days, tz, reminders] = await Promise.all([
+  const [days, tz, reminders, extra] = await Promise.all([
     loadDays(env, userId),
     userTimezone(env, userId),
     loadReminders(env, userId),
+    env.DB.batch([
+      env.DB.prepare("SELECT days, base, start FROM targets WHERE user_id = ? AND reached IS NULL").bind(userId),
+      env.DB.prepare(`SELECT ${BALANCE_SQL} AS balance`).bind(userId, userId),
+    ]),
   ]);
   const today = localNow(Date.now(), tz).date;
   const stats = computeStats(days, today);
-  return { days, today, tz, reminders, stats };
+  const target = targetProgress(extra[0].results[0], days, today);
+  const cheatDays = extra[1].results[0].balance;
+  return { days, today, tz, reminders, stats, target, cheatDays };
 }
 
-// Returns { "2026-11-13": { checks: [{ slot, sugar, time, emoji, message }], moments: [{ time, kind }] }, ... }
+// Returns { "2026-11-13": { checks: [{ slot, sugar, time, emoji, message }], moments: [{ time, kind }], cheat }, ... }
 async function loadDays(env, userId) {
-  const [checks, moments] = await env.DB.batch([
+  const [checks, moments, cheats] = await env.DB.batch([
     env.DB.prepare(
       "SELECT date, slot, sugar, time, emoji, message FROM checks WHERE user_id = ? ORDER BY date, time"
     ).bind(userId),
     env.DB.prepare("SELECT date, time, kind FROM moments WHERE user_id = ? ORDER BY date, time, id").bind(userId),
+    env.DB.prepare("SELECT date FROM cheats WHERE user_id = ?").bind(userId),
   ]);
 
   const days = {};
-  const dayFor = (date) => (days[date] ??= { checks: [], moments: [] });
+  const dayFor = (date) => (days[date] ??= { checks: [], moments: [], cheat: false });
   for (const row of checks.results) {
     const { date, ...check } = row;
     dayFor(date).checks.push(check);
@@ -842,10 +1040,15 @@ async function loadDays(env, userId) {
   for (const row of moments.results) {
     dayFor(row.date).moments.push({ time: row.time, kind: row.kind });
   }
+  // Only on days with records: a cheat on a day whose sugar was undone does nothing.
+  for (const row of cheats.results) {
+    if (days[row.date]) days[row.date].cheat = true;
+  }
   return days;
 }
 
 // A day is "sugar" if any check said yes or a sugar moment was logged,
+// "cheat" if it's a sugar day covered by a cheat day,
 // "clean" if it has any record and no sugar, "none" if nothing was logged.
 function dayStatus(day) {
   if (!day) return "none";
@@ -854,14 +1057,28 @@ function dayStatus(day) {
 
   const sugarCheck = day.checks.some((c) => c.sugar === 1);
   const sugarMoment = day.moments.some((m) => m.kind === "sugar");
-  return sugarCheck || sugarMoment ? "sugar" : "clean";
+  if (!sugarCheck && !sugarMoment) return "clean";
+  return day.cheat ? "cheat" : "sugar";
+}
+
+// Clean days walking back from `today` to `from`, stopping at the first sugar day.
+// Gray days ("none") and cheat days are skipped: they don't count and don't break it.
+function cleanRun(days, today, from) {
+  let count = 0;
+  for (let d = today; d >= from; d = shiftDay(d, -1)) {
+    const status = dayStatus(days[d]);
+    if (status === "clean") count++;
+    else if (status === "sugar") break;
+  }
+  return count;
 }
 
 // A day with nothing logged is a gray day: it does not count as clean and does not break the streak.
-// Only a sugar day breaks it. Same rule for everyone, so editing reminders never rewrites past streaks.
+// Only a sugar day breaks it; a cheat day acts like a gray day.
+// Same rule for everyone, so editing reminders never rewrites past streaks.
 function computeStats(days, today) {
   let clean = 0;
-  let sugar = 0;
+  let sugar = 0; // cheat days included: sugar was eaten, the cheat only protects the streak
   let refused = 0;
   for (const day of Object.values(days)) {
     if (dayStatus(day) === "clean") clean++;
@@ -886,14 +1103,7 @@ function computeStats(days, today) {
     }
   }
 
-  // Current streak: walk back from today until a day breaks it.
-  let streak = 0;
-  for (let d = today; d >= first; d = shiftDay(d, -1)) {
-    const status = dayStatus(days[d]);
-    if (status === "clean") streak++;
-    else if (status === "sugar") break;
-  }
-
+  const streak = cleanRun(days, today, first);
   return { streak, best, clean, sugar, refused };
 }
 

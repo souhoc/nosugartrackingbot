@@ -48,3 +48,26 @@ CREATE TABLE IF NOT EXISTS moments (
   user_id INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS moments_user ON moments (user_id, id);
+
+-- Targets: reach `days` clean days to earn cheat days. One active target per user (reached IS NULL).
+-- start NULL = the current streak counts; otherwise only days from `start` (user's local date) count.
+-- base = progress when set (the streak, or 0), so the reward only pays for new days.
+CREATE TABLE IF NOT EXISTS targets (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  days    INTEGER NOT NULL,
+  base    INTEGER NOT NULL,
+  start   TEXT,
+  created TEXT NOT NULL,
+  reached TEXT,                       -- local date it was reached, NULL while active
+  earned  INTEGER NOT NULL DEFAULT 0  -- cheat days given (after the cap)
+);
+CREATE INDEX IF NOT EXISTS targets_user ON targets (user_id);
+
+-- Sugar days the user covered with a cheat day. Balance = SUM(targets.earned) - COUNT(cheats).
+CREATE TABLE IF NOT EXISTS cheats (
+  user_id INTEGER NOT NULL,
+  date    TEXT NOT NULL,  -- user's local date, YYYY-MM-DD
+  created TEXT NOT NULL,
+  PRIMARY KEY (user_id, date)
+);

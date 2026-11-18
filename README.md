@@ -5,6 +5,7 @@ A private Telegram bot that helps you quit sugar.
 - Asks *did you eat sugar?* at your own reminders: time, emoji and message are yours (up to 12, or none). New users pick defaults, custom or none.
 - Log moments any time with one tap: **💪 Refused sugar** or **🍬 Had sugar**.
 - A calendar Mini App inside Telegram shows your streak, best streak, clean/sugar days and refusals.
+- Set a **target** (clean days) and see the days left, in the Mini App and on the iPhone widget. Reaching it earns **🍀 cheat days**: use one on a sugar day and your streak survives.
 - Multi-user with an allowlist: the owner decides who can use it.
 
 Runs on one Cloudflare Worker + D1. Free tier is plenty.
@@ -19,10 +20,12 @@ One Worker (`src/index.js`) does everything:
 | `POST /webhook` | Telegram updates: answer buttons, moments, commands. Checked with a secret header. |
 | `GET /api/stats` | Calendar data for the Mini App. Checked with Telegram `initData` (HMAC). |
 | `PUT /api/reminders` | Save the user's reminders from the Mini App. Same `initData` check. |
+| `PUT /api/target` | Set, replace or remove the target from the Mini App. Same `initData` check. |
+| `PUT /api/cheat` | Use a cheat day on a sugar day. Same `initData` check. |
 | `GET /api/widget` | Data for the iPhone widget. Checked with a per-user token. |
 | `/` | The Mini App page (`public/index.html`). |
 
-Data lives in D1: `users`, `allowlist`, `reminders`, `checks` (one row per user/day/reminder, with a copy of the reminder text), `moments`. See `schema.sql`.
+Data lives in D1: `users`, `allowlist`, `reminders`, `checks` (one row per user/day/reminder, with a copy of the reminder text), `moments`, `targets`, `cheats`. See `schema.sql`.
 
 ## Commands
 
@@ -46,6 +49,15 @@ Data lives in D1: `users`, `allowlist`, `reminders`, `checks` (one row per user/
 - A day with nothing logged is **gray**: it doesn't count as clean and doesn't break the streak.
 - Streak = clean days in a row, skipping gray days. Only a sugar day breaks it.
 - Refusals count as wins and show as a dot on the calendar.
+
+### Targets and cheat days
+
+- A target is a number of clean days, 7 to 365. One at a time. Progress follows the streak rules: gray days are skipped, a sugar day sends it back to 0.
+- When setting it, choose **count my current streak** (reached sooner) or **start from today**.
+- Reward: `floor(new days / 7) + floor(new days / 30)` cheat days, e.g. 7 → 1, 14 → 2, 30 → 5, 90 → 15. With the streak counted, only the days still to go count as new: a 30-day target on a 20-day streak pays for 10. That also means a counted streak needs at least 7 new days.
+- The bot sends a message when a target is reached. It's then done: set a new one if you want.
+- Balance is capped at 15. Anything above is lost (the message says how many).
+- Use a cheat day on a sugar day from the calendar (asks to confirm, can't be undone). That day then acts like a gray day: it doesn't break the streak or count in it. It still counts in "sugar days".
 
 ## Deploy your own
 
@@ -115,6 +127,12 @@ Telegram calls fail with the fake token (logged as `telegram error`), but the da
 Simulate updates by POSTing to `/webhook` with header `X-Telegram-Bot-Api-Secret-Token: testsecret`.
 
 ## Upgrading
+
+Adding targets and cheat days (new tables only, run before deploying that version). Then send `/widget` again to get the widget script that shows the target:
+
+```sh
+cf d1 query <database_id> --sql "$(grep -v '^\s*--' migrate-targets.sql)"
+```
 
 From fixed 4 slots to custom reminders (run before deploying that version):
 
