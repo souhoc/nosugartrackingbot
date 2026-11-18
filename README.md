@@ -103,10 +103,11 @@ You need: a Cloudflare account, the [`cf` CLI](https://developers.cloudflare.com
    curl "https://api.telegram.org/bot$BOT_TOKEN/setChatMenuButton" -H 'content-type: application/json' \
      -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Calendar\",\"web_app\":{\"url\":\"$URL/\"}}}"
 
-   # Command menu ("/" list). Everyone gets USER; the owner gets USER + owner commands.
-   # A chat scope replaces the default list, so the owner list repeats USER.
-   # Re-run after adding or renaming a command (keep in sync with the Commands table).
-   USER='{"command":"refused","description":"I refused sugar"},
+   # Command menu ("/" list). Everyone gets USER_CMDS; the owner gets USER_CMDS + OWNER_CMDS.
+   # A chat scope replaces the default list, so the owner list repeats USER_CMDS.
+   # Re-run after any change to commands or descriptions (keep in sync with the Commands table).
+   # Each call must print {"ok":true,"result":true}.
+   USER_CMDS='{"command":"refused","description":"I refused sugar"},
      {"command":"sugar","description":"I had sugar"},
      {"command":"undo","description":"Remove the last moment"},
      {"command":"reminders","description":"Your reminders: list and edit"},
@@ -114,15 +115,15 @@ You need: a Cloudflare account, the [`cf` CLI](https://developers.cloudflare.com
      {"command":"timezone","description":"Show or change your timezone"},
      {"command":"widget","description":"iPhone home screen widget (Scriptable)"},
      {"command":"start","description":"Show buttons and calendar"}'
-   OWNER='{"command":"allow","description":"Owner: /allow <user id>"},
+   OWNER_CMDS='{"command":"allow","description":"Owner: /allow <user id>"},
      {"command":"remove","description":"Owner: /remove <user id>"},
      {"command":"users","description":"Owner: list allowed users"},
      {"command":"broadcast","description":"Owner: /broadcast <text> to all users"}'
 
    curl "https://api.telegram.org/bot$BOT_TOKEN/setMyCommands" -H 'content-type: application/json' \
-     -d "{\"commands\":[$USER]}"
+     -d "{\"commands\":[$USER_CMDS]}"
    curl "https://api.telegram.org/bot$BOT_TOKEN/setMyCommands" -H 'content-type: application/json' \
-     -d "{\"scope\":{\"type\":\"chat\",\"chat_id\":$OWNER_ID},\"commands\":[$USER,$OWNER]}"
+     -d "{\"scope\":{\"type\":\"chat\",\"chat_id\":$OWNER_ID},\"commands\":[$USER_CMDS,$OWNER_CMDS]}"
    ```
 
 7. Send `/start` to your bot.
