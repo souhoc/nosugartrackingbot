@@ -5,6 +5,7 @@ Telegram bot to track sugar. One Cloudflare Worker + D1 + a static Mini App page
 ## Files
 
 - `src/index.js` — the whole Worker: cron, webhook, `/api/stats`, stats logic. Telegram API called with plain `fetch` (`tg()`).
+- `src/commands.js` — the "/" command menus, used by the Worker and `scripts/set-commands.js` (deploy step).
 - `public/index.html` — Mini App (design "A · Telegram native"). Vanilla JS, uses Telegram `--tg-theme-*` CSS vars.
 - `schema.sql` — fresh-install schema. `migrate-*.sql` — one-time upgrades (`migrate-multi-user.sql` already applied in prod).
 - `cloudflare.config.ts` — Worker config for `cf` (name, entrypoint, `env` bindings, cron). `wrangler.config.ts` only sets `assetsDirectory`.
@@ -30,7 +31,7 @@ Telegram bot to track sugar. One Cloudflare Worker + D1 + a static Mini App page
 - Access: owner = `OWNER_ID` secret, always allowed. Others via `allowlist` table, managed with `/allow`, `/remove`, `/users` (owner only). Every query must filter by `user_id`.
 - Webhook always returns 200 (else Telegram retries forever); errors are logged.
 - Mini App auth: `Authorization: tma <initData>`, verified with HMAC per Telegram docs, max age 24h.
-- Owner-only commands are shown only in the owner's command menu (`setMyCommands` with chat scope). Menus live in code (`USER_COMMANDS`, `OWNER_COMMANDS`) and are applied when the owner sends /start: add a new command there too.
+- Owner-only commands are shown only in the owner's command menu (`setMyCommands` with chat scope). Menus live in `src/commands.js` (`USER_COMMANDS`, `OWNER_COMMANDS`; the owner-command gate is built from it): add a new command there too. Applied by the deploy workflow (`scripts/set-commands.js`) and on the owner's /start.
 
 ## Workflow for every feature or patch
 

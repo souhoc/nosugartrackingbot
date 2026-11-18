@@ -49,6 +49,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # "/" command menus from src/commands.js, so they always match the deployed code.
+      - name: Set command menus
+        run: node scripts/set-commands.js
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          OWNER_ID: ${{ secrets.OWNER_ID }}
+
       - name: Remove secrets file
         if: always()
         run: rm -f .secrets.env

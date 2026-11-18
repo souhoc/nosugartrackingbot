@@ -22,6 +22,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const BTN_REFUSED = "💪 Refused sugar";
 const BTN_SUGAR = "🍬 Had sugar";
 
+import { OWNER_COMMANDS, menuRequests } from "./commands.js";
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -80,42 +82,20 @@ async function isAllowed(env, userId) {
 }
 
 // ---------- Command menus ("/" list in Telegram) ----------
-// Everyone sees USER_COMMANDS. The owner sees USER_COMMANDS + OWNER_COMMANDS: a chat-scoped
-// list replaces the default one, so it has to repeat the user commands.
-// Add a command here when you add its handler. Applied when the owner sends /start.
-
-const USER_COMMANDS = [
-  { command: "refused", description: "I refused sugar" },
-  { command: "sugar", description: "I had sugar" },
-  { command: "undo", description: "Remove the last moment" },
-  { command: "reminders", description: "Your reminders: list and edit" },
-  { command: "stats", description: "Streak and counts" },
-  { command: "timezone", description: "Show or change your timezone" },
-  { command: "widget", description: "iPhone home screen widget (Scriptable)" },
-  { command: "start", description: "Show buttons and calendar" },
-];
-
-const OWNER_COMMANDS = [
-  { command: "allow", description: "Owner: /allow <user id>" },
-  { command: "remove", description: "Owner: /remove <user id>" },
-  { command: "users", description: "Owner: list allowed users" },
-  { command: "broadcast", description: "Owner: /broadcast <text> to all users" },
-];
+// Lists live in src/commands.js (shared with the deploy step, scripts/set-commands.js).
 
 // Messages that are owner commands, built from OWNER_COMMANDS so the menu and the gate can't drift.
 // e.g. /^\/(allow|remove|users|broadcast)\b/
 const OWNER_COMMAND_RE = new RegExp(`^\\/(${OWNER_COMMANDS.map((c) => c.command).join("|")})\\b`);
 
+// Same calls as the deploy step. Also run on the owner's /start, as a backup.
 async function setCommandMenus(env) {
-  const all = await tg(env, "setMyCommands", { commands: USER_COMMANDS });
-  const owner = await tg(env, "setMyCommands", {
-    scope: { type: "chat", chat_id: Number(env.OWNER_ID) },
-    commands: [...USER_COMMANDS, ...OWNER_COMMANDS],
-  });
-  console.log("command menus set", {
-    all: all.ok || all.description,
-    owner: owner.ok || owner.description,
-  });
+  const results = [];
+  for (const body of menuRequests(env.OWNER_ID)) {
+    const res = await tg(env, "setMyCommands", body);
+    results.push(res.ok || res.description);
+  }
+  console.log("command menus set", results);
 }
 
 // ---------- Owner commands: /allow <id>, /remove <id>, /users, /broadcast <text> ----------
@@ -593,9 +573,7 @@ async function sendWelcome(env, userId, origin) {
       `${reminderListText(reminders, tz)}\n\n` +
       "Any time, tap a button below to log a moment:\n" +
       `${BTN_REFUSED}: you said no to sugar\n` +
-      `${BTN_SUGAR}: you had some\n\n` +
-      "/reminders changes your reminders, /undo removes the last moment, /stats gives a summary, " +
-      "/timezone Area/City changes your timezone, /widget gives an iPhone widget (Scriptable).",
+      `${BTN_SUGAR}: you had some`,
     reply_markup: {
       keyboard: [[{ text: BTN_REFUSED }, { text: BTN_SUGAR }]],
       resize_keyboard: true,

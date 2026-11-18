@@ -104,7 +104,7 @@ You need: a Cloudflare account, the [`cf` CLI](https://developers.cloudflare.com
      -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Calendar\",\"web_app\":{\"url\":\"$URL/\"}}}"
    ```
 
-7. Send `/start` to your bot. As the owner, `/start` also sets the command menus ("/" list): user commands for everyone, plus owner commands for you. Send it again after a deploy that changes commands.
+7. Send `/start` to your bot. As the owner, `/start` also sets the command menus ("/" list, from `src/commands.js`): user commands for everyone, plus owner commands for you. Releases deployed by GitHub Actions set them too (`scripts/set-commands.js`).
 
 [@BotFather]: https://t.me/BotFather
 [@userinfobot]: https://t.me/userinfobot
