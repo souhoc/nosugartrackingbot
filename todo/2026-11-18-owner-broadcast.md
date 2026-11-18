@@ -3,6 +3,7 @@ title: Owner can send a message to all users with /broadcast
 date: 2026-11-18
 state: in progress
 branch: feat/owner-broadcast
+pr: https://github.com/souhoc/nosugartrackingbot/pull/4
 type: feature
 ---
 
