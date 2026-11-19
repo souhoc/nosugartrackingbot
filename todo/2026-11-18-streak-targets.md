@@ -1,7 +1,8 @@
 ---
 title: Set a streak target and see days left to reach it
 date: 2026-11-18
-state: in progress
+state: completed
+pr: https://github.com/souhoc/nosugartrackingbot/pull/5
 branch: feat/targets-cheat-days
 type: feature
 ---
@@ -24,3 +25,4 @@ type: feature
 - 2026-11-18 decisions: choose to count the current streak or not, new target set by hand
 - 2026-11-18 decision: bot message when a target is reached
 - 2026-11-18 in progress — built with targets and cheat days together; no give-back for cheat days (exploit), counted streak pays only new days
+- 2026-11-18 completed — merged in #5, released v1.4.0
