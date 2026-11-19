@@ -217,7 +217,7 @@
         if (date === data.today) classes.push("today");
         if (date === selected) classes.push("selected");
         if (refusedCount(date) > 0) classes.push("refused");
-        if (date === data.target?.endDate) classes.push("goal-day");
+        if (date === goalDay()) classes.push("goal-day");
         cells += `<button class="${classes.join(" ")}" data-date="${date}" aria-label="${date}, ${status}">${d}</button>`;
       }
 
@@ -245,7 +245,7 @@
           <span><span class="sw" style="background: var(--empty)"></span>Nothing logged</span>
           <span><span class="dot"></span>Refused sugar</span>
           <span>🍀 Cheat day</span>
-          ${data.target ? "<span>🎯 Target day</span>" : ""}
+          ${goalDay()?.startsWith(`${viewYear}-${pad(viewMonth + 1)}`) ? "<span>🎯 Target day</span>" : ""}
         </div>
         <div class="detail">${detailHtml(selected)}</div>
         <button class="btn" id="edit-reminders">⏰ Reminders (${data.reminders.length})</button>
@@ -263,14 +263,21 @@
       });
     }
 
-    // Target progress and cheat day balance, under the stats.
-    // "2026-12-03" -> "Thu, Dec 3"
-    function longDate(date) {
-      return new Date(date + "T00:00:00Z").toLocaleDateString("en-US", {
-        weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
-      });
+    // "2026-12-03" -> "Thu, Dec 3" ("Wednesday, ..." with weekday "long").
+    // The year is added when it's not the current one.
+    function formatDate(date, weekday = "short") {
+      const options = { weekday, month: "short", day: "numeric", timeZone: "UTC" };
+      if (date.slice(0, 4) !== data.today.slice(0, 4)) options.year = "numeric";
+      return new Date(date + "T00:00:00Z").toLocaleDateString("en-US", options);
     }
 
+    // Marked on the calendar only while it's ahead: a past or today cell already has its own marks.
+    function goalDay() {
+      const end = data.target?.endDate;
+      return end && end > data.today ? end : null;
+    }
+
+    // Target progress and cheat day balance, under the stats.
     function goalHtml() {
       const cheats = `<span class="muted">🍀 ${data.cheatDays} cheat day${data.cheatDays === 1 ? "" : "s"}</span>`;
       const t = data.target;
@@ -287,7 +294,7 @@
         <div class="bar" role="progressbar" aria-valuenow="${t.progress}" aria-valuemax="${t.days}"><div style="width: ${pct}%"></div></div>
         <div class="row"><span class="muted" style="font-size: 13px">${t.progress} / ${t.days} clean days</span>
           <span class="muted" style="font-size: 13px">reward 🍀 ${t.reward}</span></div>
-        <span style="font-size: 13px">Target day: <b>${esc(longDate(t.endDate))}</b>
+        <span style="font-size: 13px">Target day: <b>${formatDate(t.endDate)}</b>
           <span class="muted">if every day is clean</span></span>
         <button class="btn" id="set-target">Change target</button>
       </div>`;
@@ -295,9 +302,7 @@
 
     function detailHtml(date) {
       const day = data.calendar[date] || { checks: [], moments: [] };
-      const label = new Date(date + "T00:00:00Z").toLocaleDateString("en-US", {
-        weekday: "long", month: "short", day: "numeric", timeZone: "UTC",
-      });
+      const label = formatDate(date, "long");
 
       // Answered checks keep the reminder text they had when answered.
       const rows = day.checks.map((c) => ({

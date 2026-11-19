@@ -887,7 +887,7 @@ function targetProgress(row, days, today) {
     days: row.days,
     progress,
     left,
-    endDate: targetEndDate(left, dayStatus(days[today]), today),
+    endDate: targetEndDate(left, dayStatus(days[today]), today, row.start),
     countsStreak: row.base > 0,
     reward: cheatReward(row.days - row.base),
   };
@@ -897,8 +897,10 @@ function targetProgress(row, days, today) {
 // a gray day pushes it back, a sugar day resets progress.
 // Today can still count if nothing is logged yet; if it's already clean it's in `progress`,
 // and if it's sugar (or a cheat day) it can't count.
-function targetEndDate(left, todayStatus, today) {
+// If `start` is still ahead (possible after a timezone change), counting begins there.
+function targetEndDate(left, todayStatus, today, start) {
   if (left === 0) return today;
+  if (start && start > today) return shiftDay(start, left - 1);
   const todayCanCount = todayStatus === "none";
   return shiftDay(today, todayCanCount ? left - 1 : left);
 }
