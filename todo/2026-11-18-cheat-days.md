@@ -1,7 +1,8 @@
 ---
 title: Earn cheat days by reaching targets
 date: 2026-11-18
-state: in progress
+state: completed
+pr: https://github.com/souhoc/nosugartrackingbot/pull/5
 branch: feat/targets-cheat-days
 type: feature
 ---
@@ -40,3 +41,4 @@ type: feature
 - 2026-11-18 decisions: button on the sugar day card, shown gray with an icon
 - 2026-11-18 decision: balance capped at 15
 - 2026-11-18 in progress — built with targets and cheat days together; no give-back for cheat days (exploit), counted streak pays only new days
+- 2026-11-18 completed — merged in #5, released v1.4.0

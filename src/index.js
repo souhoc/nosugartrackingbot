@@ -881,14 +881,28 @@ function targetProgress(row, days, today) {
   const first = Object.keys(days).sort()[0];
   const from = row.start && row.start > first ? row.start : first;
   const progress = first ? cleanRun(days, today, from) : 0;
+  const left = Math.max(0, row.days - progress);
   return {
     id: row.id,
     days: row.days,
     progress,
-    left: Math.max(0, row.days - progress),
+    left,
+    endDate: targetEndDate(left, dayStatus(days[today]), today, row.start),
     countsStreak: row.base > 0,
     reward: cheatReward(row.days - row.base),
   };
+}
+
+// The day the target is reached if every day from now on is clean. An estimate:
+// a gray day pushes it back, a sugar day resets progress.
+// Today can still count if nothing is logged yet; if it's already clean it's in `progress`,
+// and if it's sugar (or a cheat day) it can't count.
+// If `start` is still ahead (possible after a timezone change), counting begins there.
+function targetEndDate(left, todayStatus, today, start) {
+  if (left === 0) return today;
+  if (start && start > today) return shiftDay(start, left - 1);
+  const todayCanCount = todayStatus === "none";
+  return shiftDay(today, todayCanCount ? left - 1 : left);
 }
 
 // First day of the current streak: the day after the last sugar day, or the first record.
